@@ -146,6 +146,12 @@ async function resolveScope(
   const chatId = deps.evt.chatId;
   const mode = await deps.chatModeCache.resolve(deps.channel, chatId);
   if (mode !== 'topic') {
+    // In multiUser p2p mode the session is keyed by senderId (not chatId) to
+    // match the scope assigned in intakeMessage. Without this the ⏹ stop
+    // button and other card callbacks would look up the wrong scope and fail.
+    if (mode === 'p2p' && deps.controls.profileConfig.multiUser?.enabled) {
+      return { scope: deps.evt.operator.openId, threadId: undefined, mode };
+    }
     return { scope: chatId, threadId: undefined, mode };
   }
   // Topic group — need the carrier message's thread_id to compose scope.

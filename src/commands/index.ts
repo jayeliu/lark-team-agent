@@ -30,6 +30,7 @@ import {
   getCotMessages,
   getMaxConcurrentRuns,
   getMessageReplyMode,
+  getModel,
   getRequireMentionInGroup,
   getRunIdleTimeoutMs,
   getShowToolCalls,
@@ -80,6 +81,7 @@ import type { WorkspaceStore } from '../workspace/store';
 import { createBoundChat, defaultChatName } from '../bot/group';
 import { fetchKnownChats, type KnownChat } from '../bot/lark-info';
 import { applyLarkCliIdentityPolicy, hasStructuredLarkCliUserAuth } from '../lark-cli/identity-policy';
+import { fetchModels, formatFetchModelsError, groupModels } from '../anthropic/models';
 
 export interface Controls {
   profile: string;
@@ -110,11 +112,11 @@ export interface CommandContext {
   channel: LarkChannel;
   msg: NormalizedMessage;
   /**
-   * Session scope string. For p2p / regular group it equals `msg.chatId`;
-   * for topic groups it's `${chatId}:${threadId}` (so each topic gets its
-   * own session / cwd / active-run). All handlers should read/write
-   * session / workspace / activeRuns through this — never through
-   * `msg.chatId` directly.
+   * Session scope string. For p2p it equals `msg.senderId` (multi-user mode)
+   * or `msg.chatId` (original mode); for regular groups it equals `msg.chatId`;
+   * for topic groups it's `${chatId}:${threadId}`.
+   * All handlers should read/write session / workspace / activeRuns through
+   * this — never through `msg.chatId` directly.
    */
   scope: string;
   /** Resolved chat mode for `msg.chatId`. Used by /status to surface the
@@ -164,6 +166,7 @@ const handlers: Record<string, Handler> = {
   '/cd': handleCd,
   '/ws': handleWs,
   '/resume': handleResume,
+  '/model': handleModel,
   '/status': handleStatus,
   '/help': handleHelp,
   '/account': handleAccount,
@@ -347,15 +350,17 @@ async function handleNewChat(rawName: string, ctx: CommandContext): Promise<void
     return;
   }
 
-  // Inherit cwd from the originating chat so the new group starts in the
-  // same workspace; otherwise it'll fall back to $HOME.
-  if (sourceCwd) {
-    ctx.workspaces.setCwd(created.chatId, sourceCwd);
+  // Inherit cwd: multi-user p2p scope is senderId, so cwdFor(scope) returns
+  // the user's personal workspace. Group scope falls back to sourceCwd from
+  // the originating chat. Either way the new group starts in a meaningful dir.
+  const inheritCwd = sourceCwd ?? ctx.workspaces.cwdFor(ctx.msg.senderId);
+  if (inheritCwd) {
+    ctx.workspaces.setCwd(created.chatId, inheritCwd);
   }
 
   // Welcome the user inside the new group with a hint about how to start.
-  const welcome = sourceCwd
-    ? `🎉 群已建好，cwd 继承自原群：\`${sourceCwd}\`\n\n@我 + 任意消息开始对话。`
+  const welcome = inheritCwd
+    ? `🎉 群已建好，工作目录：\`${inheritCwd}\`\n\n@我 + 任意消息开始对话。`
     : '🎉 群已建好。\n\n@我 + 任意消息开始对话。';
   try {
     await ctx.channel.send(created.chatId, { markdown: welcome });
@@ -857,6 +862,108 @@ async function handleStop(args: string, ctx: CommandContext): Promise<void> {
   }
   // No reply for the current IM scope: if there was a run, its in-flight
   // render loop will mark the card as interrupted and re-render.
+}
+
+async function handleModel(args: string, ctx: CommandContext): Promise<void> {
+  const input = args.trim();
+
+  if (input === 'list') {
+    await reply(ctx, '正在查询可用模型…');
+    const result = await fetchModels();
+    if (!result.ok) {
+      await reply(ctx, `❌ 查询失败：${formatFetchModelsError(result.error)}`);
+      return;
+    }
+    const scopeModel = ctx.sessions.getScopeModel(ctx.scope);
+    const globalModel = getModel(ctx.controls.cfg);
+    const current = scopeModel ?? globalModel;
+    const groups = groupModels(result.models);
+    const lines: string[] = [`**可用模型列表**（共 ${result.models.length} 个）\n`];
+    for (const group of groups) {
+      lines.push(`**${group.label}**`);
+      for (const m of group.models) {
+        lines.push(m.id === current ? `- \`${m.id}\` ← 当前` : `- \`${m.id}\``);
+      }
+      lines.push('');
+    }
+    lines.push('用 `/model <模型名>` 切换（当前会话），`/model --global <模型名>` 改全局默认。');
+    await reply(ctx, lines.join('\n'));
+    return;
+  }
+
+  // --global flag: write to profile preferences (affects all scopes without override)
+  const globalFlag = input.startsWith('--global ');
+  const effectiveInput = globalFlag ? input.slice('--global '.length).trim() : input;
+
+  if (!effectiveInput) {
+    const scopeModel = ctx.sessions.getScopeModel(ctx.scope);
+    const globalModel = getModel(ctx.controls.cfg);
+    const parts: string[] = [];
+    if (scopeModel) {
+      parts.push(`当前会话模型：\`${scopeModel}\`（已覆盖全局）`);
+    } else if (globalModel) {
+      parts.push(`当前模型：\`${globalModel}\`（全局默认）`);
+    } else {
+      parts.push('当前使用默认模型（由 `ANTHROPIC_MODEL` 环境变量决定）');
+    }
+    parts.push('\n用法：');
+    parts.push('- `/model <模型名>` — 仅本会话切换');
+    parts.push('- `/model reset` — 清除本会话覆盖，恢复全局');
+    parts.push('- `/model --global <模型名>` — 修改全局默认');
+    parts.push('- `/model list` — 查看可用模型');
+    await reply(ctx, parts.join('\n'));
+    return;
+  }
+
+  const isReset = effectiveInput === 'reset' || effectiveInput === 'default';
+
+  if (globalFlag) {
+    // Write to global preferences
+    const newModel = isReset ? undefined : effectiveInput;
+    await withConfigFileLock(ctx.controls.configPath, async () => {
+      const root = await loadRootConfig(ctx.controls.configPath);
+      if (!root) {
+        ctx.controls.cfg.preferences = { ...(ctx.controls.cfg.preferences ?? {}), model: newModel };
+        await saveConfig(ctx.controls.cfg, ctx.controls.configPath);
+        return;
+      }
+      const profile = root.profiles[ctx.controls.profile];
+      if (!profile) throw new Error(`profile not found: ${ctx.controls.profile}`);
+      root.profiles[ctx.controls.profile] = {
+        ...profile,
+        preferences: { ...(profile.preferences ?? {}), model: newModel },
+      };
+      await saveRootConfig(root, ctx.controls.configPath);
+    });
+    ctx.controls.cfg.preferences = { ...(ctx.controls.cfg.preferences ?? {}), model: newModel };
+    ctx.controls.profileConfig = {
+      ...ctx.controls.profileConfig,
+      preferences: { ...ctx.controls.profileConfig.preferences, model: newModel },
+    };
+    await reply(
+      ctx,
+      newModel
+        ? `✓ 全局默认模型已设为 \`${newModel}\`，对无覆盖的会话立即生效。`
+        : '✓ 已清除全局模型设置，恢复环境变量默认。',
+    );
+    return;
+  }
+
+  // Per-scope model change
+  if (isReset) {
+    const removed = ctx.sessions.clearScopeModel(ctx.scope);
+    const fallback = getModel(ctx.controls.cfg);
+    await reply(
+      ctx,
+      removed
+        ? `✓ 已清除本会话模型覆盖，恢复为${fallback ? `全局默认 \`${fallback}\`` : '环境变量默认'}。`
+        : `本会话未设置模型覆盖（当前使用${fallback ? `全局默认 \`${fallback}\`` : '环境变量默认'}）。`,
+    );
+    return;
+  }
+
+  ctx.sessions.setScopeModel(ctx.scope, effectiveInput);
+  await reply(ctx, `✓ 本会话模型已切换为 \`${effectiveInput}\`，下次对话立即生效。`);
 }
 
 async function handleTimeout(args: string, ctx: CommandContext): Promise<void> {

@@ -29,6 +29,12 @@ export interface AppPaths {
   userLockDir: string;
   profileLockFile: string;
   appLockFile(appId: string): string;
+  /** Base directory for per-user OAuth token stores. */
+  userTokensDir: string;
+  /** Registry JSON file tracking per-user token status. */
+  userTokenRegistryFile: string;
+  /** Per-user lark-cli config directory (inject as LARKSUITE_CLI_CONFIG_DIR). */
+  userLarkCliConfigDir(senderId: string): string;
 }
 
 const DEFAULT_PROFILE = 'claude';
@@ -63,6 +69,10 @@ export function resolveAppPaths(opts: ResolveAppPathsOptions = {}): AppPaths {
     userLockDir,
     profileLockFile: join(userLockDir, 'profile', `${profile}.lock`),
     appLockFile: (appId: string) => join(userLockDir, 'app', `${lockSafeName(appId)}.lock`),
+    userTokensDir: join(profileDir, 'user-tokens'),
+    userTokenRegistryFile: join(profileDir, 'user-tokens', 'registry.json'),
+    userLarkCliConfigDir: (senderId: string) =>
+      join(profileDir, 'user-tokens', lockSafeName(senderId), 'lark-cli'),
   };
 }
 

@@ -85,7 +85,15 @@ export class ClaudeAdapter implements AgentAdapter {
 
     const child = spawnProcess(this.binary, args, {
       cwd: opts.cwd,
-      env: mergeProcessEnv(process.env, buildLarkChannelEnv(this.larkChannel)),
+      env: mergeProcessEnv(
+        mergeProcessEnv(process.env, buildLarkChannelEnv(this.larkChannel)),
+        // Override LARKSUITE_CLI_CONFIG_DIR with the per-user token dir when provided.
+        // This ensures lark-cli reads/writes the OAuth token belonging to the
+        // requesting user rather than any shared bot or default identity.
+        opts.userLarkCliConfigDir
+          ? { LARKSUITE_CLI_CONFIG_DIR: opts.userLarkCliConfigDir }
+          : {},
+      ),
       stdio: ['pipe', 'pipe', 'pipe'],
     }) as ClaudeChild;
 

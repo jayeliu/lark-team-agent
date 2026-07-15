@@ -1,7 +1,7 @@
 {
-  "name": "lark-channel-bridge",
+  "name": "lark-channel-bridge-team",
   "version": "0.4.1",
-  "description": "Bridge Feishu/Lark messenger with local CLI coding agents",
+  "description": "Multi-user team edition of lark-channel-bridge",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "publishConfig": {
@@ -52,7 +52,8 @@
     "cross-spawn": "^7.0.6",
     "graceful-fs": "^4.2.11",
     "proper-lockfile": "^4.1.2",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "pinyin": "^4.0.0"
   },
   "devDependencies": {
     "@types/cross-spawn": "^6.0.6",

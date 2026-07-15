@@ -34,6 +34,8 @@ export interface StartRunFlowInput {
   executor: RunExecutor;
   now: number;
   stopGraceMs?: number;
+  /** Per-user lark-cli config dir; forwarded to the executor and adapter. */
+  userLarkCliConfigDir?: string;
   observability?: {
     profile: string;
     agent: string;
@@ -143,6 +145,7 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
       policy,
       sessionId,
       threadId,
+      model: (input.sessions.getScopeModel(input.scopeId) || input.profileConfig.preferences.model?.trim()) || undefined,
       images:
         input.capability.agentId === 'codex'
           ? policy.attachments
@@ -151,6 +154,7 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
               .filter((path): path is string => Boolean(path))
           : undefined,
       stopGraceMs: input.stopGraceMs,
+      userLarkCliConfigDir: input.userLarkCliConfigDir,
       observability: input.observability,
     });
   } catch (err) {

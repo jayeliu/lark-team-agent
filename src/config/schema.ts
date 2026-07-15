@@ -145,6 +145,12 @@ export interface AppPreferences {
    * Range 100-30000; out-of-range values fall back to default.
    */
   agentStopGraceMs?: number;
+  /**
+   * Override the Claude model passed via `--model` to each run.
+   * When set, takes precedence over the ANTHROPIC_MODEL env var.
+   * Use `/model <name>` to set, `/model` to show current value.
+   */
+  model?: string;
 }
 
 /**
@@ -266,4 +272,10 @@ export function getRunIdleTimeoutMs(cfg: AppConfig): number | undefined {
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return undefined;
   const clamped = Math.min(Math.max(Math.floor(raw), 1), 120);
   return clamped * 60_000;
+}
+
+/** Returns the model override string, or undefined to let claude use its default. */
+export function getModel(cfg: AppConfig): string | undefined {
+  const raw = cfg.preferences?.model;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
 }

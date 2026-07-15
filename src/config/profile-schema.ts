@@ -93,6 +93,14 @@ export interface ProfileConfig {
   attachments: AttachmentConfig;
   comments: CommentConfig;
   larkCli: LarkCliConfig;
+  multiUser?: MultiUserConfig;
+}
+
+export interface MultiUserConfig {
+  /** Enable per-user workspace isolation. Default: false (original behaviour). */
+  enabled: boolean;
+  /** Root directory under which per-user workspaces are created. Default: /workspace */
+  workspaceRoot: string;
 }
 
 export interface RootConfig {
@@ -153,6 +161,7 @@ export function normalizeProfileConfig(input: unknown): ProfileConfig {
     attachments?: Partial<AttachmentConfig>;
     comments?: unknown;
     larkCli?: unknown;
+    multiUser?: unknown;
   };
 
   if (raw.schemaVersion !== 2) {
@@ -202,6 +211,19 @@ export function normalizeProfileConfig(input: unknown): ProfileConfig {
     },
     comments,
     larkCli,
+    ...((() => { const mu = normalizeMultiUser(raw.multiUser); return mu ? { multiUser: mu } : {}; })()),
+  };
+}
+
+function normalizeMultiUser(input: unknown): MultiUserConfig | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const raw = input as Record<string, unknown>;
+  if (raw.enabled !== true) return undefined;
+  return {
+    enabled: true,
+    workspaceRoot: typeof raw.workspaceRoot === 'string' && raw.workspaceRoot.trim()
+      ? raw.workspaceRoot.trim()
+      : '/workspace',
   };
 }
 

@@ -61,7 +61,7 @@ import { PendingQueue } from './pending-queue';
 import { ProcessPool } from './process-pool';
 import { fetchQuotedContext, type QuotedContext } from './quote';
 import { addWorkingReaction, removeReaction } from './reaction';
-import { fetchKnownChats } from './lark-info';
+import { fetchKnownChats, fetchUserName } from './lark-info';
 import type { AppPaths } from '../config/app-paths';
 import {
   consumeCotEvents,
@@ -69,10 +69,36 @@ import {
   CotPublisher,
   finalAnswerOnlyState,
 } from './cot';
+import { UserRegistry } from '../multi-user/user-registry';
+import { buildWelcomeMessage } from '../multi-user/onboarding';
+import { UserTokenRegistry } from '../multi-user/user-token-registry';
+import { buildOAuthPromptCard } from '../card/oauth-prompt-card';
 
 const DEBOUNCE_MS = 600;
 const STREAM_TERMINAL_GRACE_MS = 3000;
 const REACTION_CLEANUP_GRACE_MS = 1000;
+
+/**
+ * Extract the lark-channel bridge environment variables from the current
+ * process environment. These are forwarded to lark-cli subprocesses spawned
+ * by UserTokenRegistry so the device-code auth flow runs inside the same
+ * bridge context that the parent bridge is using.
+ */
+function buildLarkChannelBridgeEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  const keys = [
+    'LARK_CHANNEL',
+    'LARK_CHANNEL_HOME',
+    'LARK_CHANNEL_PROFILE',
+    'LARK_CHANNEL_CONFIG',
+    'LARKSUITE_CLI_CONFIG_DIR',
+  ];
+  for (const key of keys) {
+    const val = process.env[key];
+    if (val !== undefined) env[key] = val;
+  }
+  return env;
+}
 
 const BRIDGE_AGENT_INSTRUCTIONS = [
   '你在 bridge 进程中运行，普通 lark-cli 会继承 LARK_CHANNEL=1 并进入 bridge-bound 模式。',
@@ -174,10 +200,13 @@ export interface StartChannelDeps {
   workspaces: WorkspaceStore;
   controls: Controls;
   appPaths?: Pick<AppPaths, 'secretsFile' | 'keystoreSaltFile' | 'mediaDir'>;
+  userRegistry?: UserRegistry;
+  onboardingMdPath?: string;
 }
 
 export async function startChannel(deps: StartChannelDeps): Promise<BridgeChannel> {
-  const { cfg, agent, sessions, sessionCatalog, workspaces, controls } = deps;
+  const { cfg, agent, sessions, sessionCatalog, workspaces, controls,
+          userRegistry, onboardingMdPath } = deps;
   const activeRuns = new ActiveRuns();
   // ChatModeCache stays per-bridge-instance — invalidated on restart along
   // with everything else. Topic-mode chats only need one chat.get() call ever.
@@ -261,6 +290,31 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
   };
 
   const channel = createLarkChannel(opts);
+
+  // Multi-user: initialise UserRegistry if enabled
+  let resolvedUserRegistry = deps.userRegistry;
+  if (!resolvedUserRegistry && controls.profileConfig.multiUser?.enabled && deps.appPaths) {
+    const registryPath = join(dirname(deps.appPaths.secretsFile), 'users.json');
+    const workspaceRoot = controls.profileConfig.multiUser.workspaceRoot;
+    resolvedUserRegistry = new UserRegistry(registryPath, workspaceRoot);
+    await resolvedUserRegistry.load();
+  }
+
+  // Per-user OAuth token registry: active when multi-user + user-default identity.
+  let userTokenRegistry: UserTokenRegistry | undefined;
+  if (
+    controls.profileConfig.multiUser?.enabled &&
+    controls.profileConfig.larkCli.identityPreset === 'user-default' &&
+    deps.appPaths
+  ) {
+    const baseDir = join(dirname(deps.appPaths.secretsFile), 'user-tokens');
+    userTokenRegistry = new UserTokenRegistry({
+      baseDir,
+      larkEnv: buildLarkChannelBridgeEnv(),
+    });
+    await userTokenRegistry.load();
+  }
+
   const media = new MediaCache(channel, deps.appPaths?.mediaDir);
 
   // Pending → run handoff: while a run is active on a chat, block its pending
@@ -309,6 +363,9 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           activePolicyFingerprints,
           scope,
           mode,
+          userTokenRegistry,
+          appId: cfg.accounts.app.id,
+          appBrand: cfg.accounts.app.tenant,
         });
       } catch (err) {
         log.fail('flush', err);
@@ -339,6 +396,19 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           logThreadModeOverride,
           executor,
           pool,
+          userRegistry: resolvedUserRegistry,
+          onboardingMdPath: deps.onboardingMdPath,
+          appCredentials: resolvedUserRegistry
+            ? {
+                appId: cfg.accounts.app.id,
+                appSecret,
+                domain: typeof opts.domain === 'string'
+                  ? opts.domain
+                  : cfg.accounts.app.tenant === 'lark'
+                    ? 'https://open.larksuite.com'
+                    : 'https://open.feishu.cn',
+              }
+            : undefined,
         }),
       ).catch((err) => log.fail('intake', err));
     },
@@ -536,6 +606,10 @@ interface IntakeDeps {
   logThreadModeOverride: LogThreadModeOverride;
   executor: RunExecutor;
   pool: ProcessPool;
+  userRegistry?: UserRegistry;
+  onboardingMdPath?: string;
+  /** Credentials needed to call Contact API for fetching user name on first contact */
+  appCredentials?: { appId: string; appSecret: string; domain: string };
 }
 
 type LogThreadModeOverride = (input: {
@@ -559,6 +633,8 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     logThreadModeOverride,
     executor,
     pool,
+    userRegistry,
+    onboardingMdPath,
   } = deps;
   const preview = msg.content.length > 80 ? `${msg.content.slice(0, 80)}…` : msg.content;
   // Resolve scope (and underlying chat mode) once at intake — every
@@ -576,9 +652,52 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
       threadId: msg.threadId,
     });
   }
+
+  const multiUser = controls.profileConfig.multiUser?.enabled ? controls.profileConfig.multiUser : undefined;
+
+  // Multi-user: p2p scope = senderId (stable across app reinstalls)
+  // All group types keep chatId as scope (shared session by design)
   const scope = chatMode === 'topic' && msg.threadId
     ? `${msg.chatId}:${msg.threadId}`
-    : msg.chatId;
+    : (multiUser && msg.chatType === 'p2p')
+      ? msg.senderId
+      : msg.chatId;
+
+  // Multi-user: ensure user workspace is initialised on first contact (p2p only)
+  if (multiUser && userRegistry && msg.chatType === 'p2p') {
+    const existing = userRegistry.get(msg.senderId);
+    if (!existing) {
+      // H2: p2p messages don't carry senderName in the raw event; try the
+      // Contact API first, then fall back to msg.senderName, then to a
+      // deterministic placeholder so registration never silently skips.
+      const apiName = deps.appCredentials
+        ? await fetchUserName({ ...deps.appCredentials, openId: msg.senderId })
+        : undefined;
+      const effectiveName = apiName || msg.senderName?.trim() || `user-${msg.senderId.slice(-6)}`;
+      let record;
+      try {
+        record = await userRegistry.register(msg.senderId, effectiveName);
+      } catch (err) {
+        log.fail('multi-user', err, { step: 'init-user', senderId: msg.senderId });
+        // H2: don't continue — workspace isn't set up, so queueing the message
+        // would run Claude in an undefined cwd.
+        try {
+          await channel.send(msg.chatId, { markdown: '⚠️ 工作空间初始化失败，请稍后重试。' });
+        } catch { /* best-effort */ }
+        return;
+      }
+      workspaces.setCwd(scope, record.workspace);
+      const welcome = buildWelcomeMessage(record, onboardingMdPath);
+      await channel.send(msg.chatId, { markdown: welcome });
+    } else {
+      // Ensure workspace dir exists (e.g. after volume remount)
+      await userRegistry.ensureWorkspace(existing);
+      // Set cwd if not yet recorded (e.g. fresh workspaces.json)
+      if (!workspaces.cwdFor(scope)) {
+        workspaces.setCwd(scope, existing.workspace);
+      }
+    }
+  }
   log.info('intake', 'enter', {
     scope,
     chatType: msg.chatType,
@@ -670,6 +789,13 @@ interface RunBatchDeps {
   activePolicyFingerprints: Map<string, string>;
   scope: string;
   mode: ChatMode;
+  /** Per-user OAuth token registry. When set and multiUser + user-default identity
+   *  is active, the agent run is gated on the sender having a valid token. */
+  userTokenRegistry?: UserTokenRegistry;
+  /** App ID passed to lark-cli when initiating a new user auth flow. */
+  appId?: string;
+  /** App brand (feishu | lark) for lark-cli bind. */
+  appBrand?: string;
 }
 
 async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
@@ -687,6 +813,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     activePolicyFingerprints,
     scope,
     mode,
+    userTokenRegistry,
+    appId,
+    appBrand,
   } = deps;
   if (batch.length === 0) return;
   const firstMsg = batch[0];
@@ -771,6 +900,60 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     controls.profileConfig.agentKind === 'codex'
       ? codexCapability(controls.profileConfig)
       : claudeCapability(controls.profileConfig);
+
+  // Per-user OAuth gate: when multi-user mode + user-default lark-cli identity
+  // are both enabled, ensure the sender has an OAuth token before running the
+  // agent. If the token is missing, push an auth card to the sender's private
+  // chat and defer this run.
+  let userLarkCliConfigDir: string | undefined;
+  if (
+    userTokenRegistry &&
+    controls.profileConfig.multiUser?.enabled &&
+    controls.profileConfig.larkCli.identityPreset === 'user-default'
+  ) {
+    const senderId = firstMsg.senderId;
+    if (userTokenRegistry.needsAuth(senderId)) {
+      if (userTokenRegistry.isPending(senderId)) {
+        // Auth already in progress — remind the user and skip this run.
+        await channel.send(senderId, {
+          markdown: '⏳ 正在等待你完成授权，请检查私聊中的授权链接并完成操作，然后重新发送消息。',
+        });
+        log.info('user-auth', 'pending', { sender: senderId.slice(-6) });
+        return;
+      }
+
+      // Start a new auth flow.
+      try {
+        const authResult = await userTokenRegistry.startAuth(senderId, {
+          appId: appId ?? controls.profileConfig.accounts.app.id,
+          brand: appBrand ?? controls.profileConfig.accounts.app.tenant,
+        });
+        const expiresInMinutes = authResult.expiresIn
+          ? Math.max(1, Math.round(authResult.expiresIn / 60))
+          : undefined;
+        const authCard = buildOAuthPromptCard({
+          verificationUrl: authResult.verificationUrl,
+          expiresInMinutes,
+        });
+        // Send the auth card to the user's private chat (open_id routing).
+        await channel.send(senderId, { card: authCard });
+        // Notify in the current chat that auth is required.
+        await channel.send(chatId, {
+          markdown: '🔐 需要飞书授权才能以你的身份操作文档，授权链接已私信发给你，完成后请重新发送消息。',
+        }, sendOpts);
+        log.info('user-auth', 'initiated', { sender: senderId.slice(-6) });
+      } catch (err) {
+        log.fail('user-auth', err, { step: 'start-auth', sender: senderId.slice(-6) });
+        await channel.send(chatId, {
+          markdown: '❌ 发起授权失败，请稍后重试或联系管理员。',
+        }, sendOpts);
+      }
+      return;
+    }
+
+    userLarkCliConfigDir = userTokenRegistry.getLarkCliConfigDir(senderId);
+  }
+
   const flow = await startRunFlow({
     scopeId: scope,
     scope: scopeContext,
@@ -785,6 +968,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     executor,
     now: Date.now(),
     stopGraceMs: getAgentStopGraceMs(controls.cfg),
+    userLarkCliConfigDir,
     observability: {
       profile: controls.profile,
       agent: capability.agentId,

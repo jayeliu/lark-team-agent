@@ -1,356 +1,252 @@
-# lark-channel-bridge
+# lark-channel-bridge-team
 
-A lightweight bot that bridges Feishu / Lark messenger with your local Claude Code or Codex CLI. Run one command, scan a QR code to bind a PersonalAgent app, and talk to your local coding agent from chat.
+> This project is a fork of [zhangzara/lark-channel-bridge](https://github.com/zhangzara/lark-channel-bridge), extended under the MIT license. Big thanks to zhangzara for building this excellent bridge and for openly encouraging community forks — this project wouldn't exist without that spirit.
 
 [中文 README](./README.zh.md)
 
-For a product walkthrough, see the [Feishu document](https://larkcommunity.feishu.cn/docx/OaRIdFIRFoLM3xxTmKwcetHqn5e).
+A team-grade bot that bridges Feishu / Lark messenger with local Claude Code CLI. On top of the original bridge, it adds multi-user workspace isolation, first-contact onboarding, and dynamic model switching — designed for teams that want to share a single deployed bot while keeping each member's sessions, working directories, and memory completely separate.
 
-## What it does
+---
 
-- Forwards Feishu / Lark messages to local Claude Code or Codex CLI. Send a DM directly, or `@bot` in a group.
-- **Streaming card**: text replies and tool calls update on one Lark card in real time.
-- **COT process messages**: optionally send a process message with agent progress text and tool calls, then send the final answer separately.
-- **Session continuity**: each chat, topic, or document comment thread keeps its own session.
-- **Queueing and batching**: messages sent in quick succession are handled together; messages sent during a run are queued for the next turn, while commands like `/new`, `/cd`, `/ws use`, and `/stop` can interrupt the current task.
-- **Multiple workspaces**: use `/cd` to switch the current project, and `/ws` to save and reuse common project directories.
-- **Images and files**: send them to the bot directly, and the bridge downloads them locally for the agent.
-- **Interactive cards**: `/help`, `/ws list`, and `/status` return cards with clickable buttons.
+## Who this is for
 
-## Prerequisites
+| Scenario | Details |
+|----------|---------|
+| **Shared team AI Agent** | Product, engineering, and design members all talk to the same Feishu bot, each with fully isolated sessions and working directories |
+| **Server-side deployment** | Deploy once on a cloud server; team members need no local setup |
+| **Multiple projects** | Each user has a personal workspace and can freely switch between projects with `/cd` and `/ws` |
+| **Solo developers** | Multi-user mode is opt-in; when disabled, behaviour is identical to the original bridge |
 
-- Node.js **>= 20.12.0**
-- At least one local agent installed and logged in:
-  - Claude Code: `claude`, see https://docs.anthropic.com/en/docs/claude-code/quickstart
-  - Codex CLI: `codex`, see https://developers.openai.com/codex/cli
-- A Feishu / Lark **PersonalAgent** app. The first-run QR wizard can create and bind one for you.
+---
 
-## Install
+## Core problems solved
 
-```bash
-npm i -g lark-channel-bridge
-# or
-pnpm add -g lark-channel-bridge
+The original bridge is a personal tool for a single developer. When shared across a team:
+
+1. **Session cross-contamination** — everyone shares one session and interferes with each other
+2. **Working directory conflicts** — `/cd` changes the directory for everyone simultaneously
+3. **No user attribution** — logs and memory files are intermixed with no way to trace who did what
+4. **No onboarding** — new members have no idea what the bot can do or how to use it
+
+This fork solves all four with a **multi-user architecture**: the first time a user DMs the bot, their workspace is automatically initialized; all subsequent operations stay inside their own space.
+
+---
+
+## Feature overview
+
+### New features
+
+#### Multi-user workspace isolation
+
+- **Auto-init on first contact**: when a user DMs the bot for the first time, the bridge reads their Feishu display name, converts it to a pinyin directory name, and creates a personal workspace under `workspaceRoot`
+- **Directory layout**: each user workspace contains `projects/` and `CC-Memory/`
+- **Pre-seeded config files**: `CLAUDE.md` (workspace conventions) and `user.md` (user identity) are written on initialization
+- **Stable session scope**: p2p scope is keyed by `senderId` instead of `chatId`, surviving app reinstalls and device switches
+- **Concurrency-safe**: concurrent first messages from the same user share a single registration promise; registration failures send a visible error and halt further processing
+
+Enable in your profile config:
+
+```json
+{
+  "multiUser": {
+    "enabled": true,
+    "workspaceRoot": "/workspace"
+  }
+}
 ```
 
-## First run
+#### First-contact onboarding
 
-```bash
-lark-channel-bridge run
-```
+- After workspace initialization, the bot sends a welcome message introducing its capabilities and available commands
+- Supports an external `onboarding.md` file for custom content, with `{name}`, `{workspace}`, and `{pinyinDir}` placeholders
+- Built-in default content covers: capability overview, command reference table, and CC-Memory usage guide
 
-The first run opens a QR-code wizard:
-
-1. A QR code renders in your terminal.
-2. Scan it with the Feishu / Lark app.
-3. Pick or create a PersonalAgent app.
-4. If prompted, choose which agent to initialize.
-5. Config is written to `~/.lark-channel/config.json`.
-
-You do not need to choose a project directory up front. The bridge creates a profile-managed default working directory; after startup, send `/cd <path>` in Feishu / Lark to switch to a real project.
-
-If you already have a PersonalAgent app, pass `--app-id` during initialization to skip app creation. The command prompts for the App Secret.
-
-```bash
-lark-channel-bridge run --app-id cli_xxx
-# or initialize and start the background service directly
-lark-channel-bridge start --app-id cli_xxx
-```
-
-For Lark global apps, add `--tenant lark`.
-
-## Background service
-
-Use `run` for first-run setup and foreground debugging. After the bot can send and receive messages, stop the foreground process with `Ctrl-C`, then use an OS-managed service for background operation:
-
-```bash
-lark-channel-bridge start
-lark-channel-bridge status
-lark-channel-bridge stop
-```
-
-Install globally before using service commands. The daemon's launchd plist / systemd unit / Windows task records the bridge CLI path; if that path comes from an npm temp cache through `npx`, the daemon can break when the cache is cleaned. `run` is fine through `npx` as a one-shot foreground process.
-
-Service commands install a per-profile service:
-
-```bash
-lark-channel-bridge start [--profile <name>]
-lark-channel-bridge stop [--profile <name>]
-lark-channel-bridge restart [--profile <name>]
-lark-channel-bridge status [--profile <name>]
-lark-channel-bridge unregister [--profile <name>]
-```
-
-Platform mapping:
-- **macOS**: launchd user agent `ai.lark-channel-bridge.bot.<profile>`
-- **Linux**: systemd user unit `lark-channel-bridge.bot.<profile>.service`
-- **Windows**: Task Scheduler task `LarkChannelBridge.Bot.<profile>`, launched through a `.cmd` wrapper
-
-Daemon logs are under `~/.lark-channel/profiles/<profile>/logs/daemon/`.
-
-### Multiple profiles: Claude and Codex
-
-By default, the bridge starts with the currently selected profile. Use `profile use <name>` to change it. Each profile keeps its own app credentials, sessions, working directories, and logs. Create multiple profiles only when you need to connect multiple PersonalAgent apps, or run Claude and Codex as separate bots:
-
-```bash
-lark-channel-bridge start --profile claude --agent claude
-lark-channel-bridge start --profile codex --agent codex
-```
-
-For example, to restart only the Codex bot:
-
-```bash
-lark-channel-bridge restart --profile codex
-lark-channel-bridge status --profile codex
-```
-
-## Commands
-
-### Host CLI
-
-```text
-lark-channel-bridge run [--profile <name>] [--agent claude|codex] [--workspace <path>] [-c <config>]
-lark-channel-bridge migrate [--profile <name>] [--agent claude|codex]
-lark-channel-bridge ps
-lark-channel-bridge kill <id|#>
-lark-channel-bridge --help
-```
-
-`profile use <name>` changes the profile used by later default starts. Use these profile management commands when running separate Claude / Codex bots, connecting multiple PersonalAgent apps, or doing scripted deployment:
-
-```bash
-lark-channel-bridge profile create claude --agent claude
-lark-channel-bridge profile create codex --agent codex
-lark-channel-bridge profile list
-lark-channel-bridge profile use <name>
-lark-channel-bridge profile remove <name>
-lark-channel-bridge profile remove <name> --purge --yes
-lark-channel-bridge profile export <name> [--output ./profile.json] [--force]
-lark-channel-bridge profile export <name> --include-secrets --yes
-```
-
-`profile remove` archives local state by default, including the active profile. If other profiles remain, the bridge switches to the next one; if it was the last profile, the root config is cleared so the same name can be created again. `--purge --yes` permanently deletes local state. `profile export` redacts app secrets by default; `--include-secrets --yes` includes sensitive config.
-
-If a profile was created with the wrong agent kind, stop or unregister any matching background service first, then run `profile remove <name>` and recreate it with the intended `--agent`.
-
-### Slash commands inside Feishu / Lark
+#### Dynamic model switching (`/model`)
 
 | Command | Effect |
-|---|---|
-| `/new`, `/reset` | Clear the current session |
-| `/cd <path>` | Switch working directory and reset the session |
+|---------|--------|
+| `/model` | Show the current model |
+| `/model list` | Query available models from the API, grouped by family, with the current model marked |
+| `/model <name>` | Switch to the named model; takes effect on the next message |
+| `/model reset` | Restore the default model (controlled by `ANTHROPIC_MODEL` env var) |
+
+- Model setting is persisted to `config.json` and survives restarts
+- In-memory state is updated immediately — no bridge restart needed
+- `/model list` calls `/v1/models` and supports the official Anthropic API and compatible proxies
+
+#### Reusable model-query module (`src/anthropic/models`)
+
+A standalone module for any project that needs to enumerate models:
+
+- `fetchModels(opts?)` — queries `/v1/models`, never throws, returns a typed result union
+- `groupModels(models)` — groups by family (Claude / GPT / DeepSeek / Qwen / GLM / Kimi / MiniMax / Embeddings / Other)
+- `formatFetchModelsError(error)` — human-readable error messages
+- Built-in 10 s timeout with proper AbortController cleanup; full error codes: `missing-api-key` / `timeout` / `network-error` / `http-error` / `parse-error`
+
+---
+
+### Original features (fully preserved)
+
+#### Message forwarding
+
+- Send a DM directly, or `@bot` in a group, to forward tasks to local Claude Code or Codex CLI
+- **Streaming card**: text replies and tool calls update in real time on a single Lark card
+- **COT process messages**: optionally send a progress message with agent step text and tool summaries, then deliver the final answer separately
+- **Session continuity**: each chat, topic, or document comment thread keeps its own session
+- **Queuing and batching**: messages sent in quick succession are handled together; messages during a run queue for the next turn; `/new`, `/cd`, `/ws use`, and `/stop` interrupt the current run
+
+#### Working directory management
+
+| Command | Effect |
+|---------|--------|
+| `/cd <path>` | Switch working directory and reset the current session |
 | `/ws list` | List named workspaces |
-| `/ws save <name>` | Save the current working directory as a named workspace |
+| `/ws save <name>` | Save the current directory under a name |
 | `/ws use <name>` | Switch to a named workspace |
 | `/ws remove <name>` | Delete a named workspace |
-| `/resume` | Resume compatible history for the same agent, working directory, and permission mode |
-| `/status` | Show profile, agent, working directory, session, lark-cli identity, and run state |
-| `/config` | Adjust presentation preferences, access settings, and lark-cli identity policy |
-| `/invite user @name` | Allow a user to use the bot in DMs |
-| `/invite admin @name` | Add an access-control admin |
-| `/invite group` | Allow the current group to use the bot |
-| `/invite all group` | Allow all groups the bot has joined |
-| `/remove user @name`, `/remove admin @name`, `/remove group` | Remove access entries |
-| `/stop` | Stop the current run, including the card stop button |
-| `/timeout [N\|off\|default]` | Set or clear the current session idle watchdog |
+
+#### Session management
+
+| Command | Effect |
+|---------|--------|
+| `/new` / `/reset` | Clear the current session |
+| `/new chat [name]` | Create a Feishu group chat bound to a new session, inheriting the current working directory |
+| `/resume` | Browse and restore compatible history sessions |
+| `/stop` | Stop the current run |
+| `/timeout [N\|off\|default]` | Set or clear the session idle watchdog |
+
+#### Status and configuration
+
+| Command | Effect |
+|---------|--------|
+| `/status` | Show profile, agent, cwd, session, lark-cli identity, and run state |
+| `/config` | Adjust reply mode, tool-call display, COT mode, access lists, and lark-cli identity |
+| `/model` | Show / switch model (new, see above) |
+| `/help` | Help card |
+
+#### Access control
+
+Private by default — only the bot creator can use it. Manage access with:
+
+| Command | Effect |
+|---------|--------|
+| `/invite user @name` | Allow a user to DM the bot |
+| `/invite admin @name` | Add an admin |
+| `/invite group` | Allow the current group |
+| `/invite all group` | Allow every group the bot is in |
+| `/remove user/admin/group …` | Remove access |
+
+#### System maintenance
+
+| Command | Effect |
+|---------|--------|
 | `/ps` | List local bridge processes |
 | `/exit <id\|#>` | Stop a bridge process |
 | `/reconnect` | Force a WebSocket reconnect |
-| `/doctor [description]` | Run low-sensitive diagnostics |
-| `/help` | Help card |
+| `/doctor [description]` | Run low-sensitivity diagnostics |
 
-DMs do not require an @ mention. Groups and topic groups require `@bot` by default; `@all` is ignored. Cloud-doc comments in supported document types run when the bot is mentioned.
+#### Media and files
 
-## Reply Display and COT
+- Send images or files directly to the bot; the bridge downloads them locally before passing them to the agent
+- CloudDoc comment mentions are handled per document thread
 
-`/config` controls three presentation settings:
+#### Multiple profiles / agents
 
-- **Message reply mode**: `message card` streams the final reply; `plain text` sends once after the run finishes.
-- **Tool-call display**: controls whether tool blocks appear in the final card / markdown reply.
-- **COT process message**: `off` sends only the final reply; `brief` first sends a COT message with agent progress text and tool summaries; `detailed` also includes tool args and truncated output.
+- Each profile has its own app credentials, sessions, workspaces, lark-cli directory, and logs
+- Run Claude and Codex as separate bots using separate profiles
 
-When COT is enabled, the bridge splits the process view and final answer into two messages. The COT message is for tracing what the agent did; the final answer is still generated from the agent's raw text, without heuristic bridge-side filtering. If an agent emits final-answer text as ordinary stream text, that text can also appear in the COT process message.
+---
 
-## lark-cli identity policy
+## Quick deployment (server)
 
-Each profile uses a profile-local lark-cli directory at `~/.lark-channel/profiles/<profile>/lark-cli`. The agent process receives `LARKSUITE_CLI_CONFIG_DIR` for that directory, so personal authorization in one profile is not shared with another profile.
+### Prerequisites
 
-The default policy is `bot-only`: lark-cli uses the app/bot identity and does not access personal resources. When a user authorizes personal resources such as calendar, mail, or drive, the current profile can switch to `user-default`, which keeps app identity available and also allows the authorized user identity. Owner/admin users can inspect or change this policy in `/config`; `/status` shows the current summary as `lark-cli: app` or `lark-cli: user-ready`.
+- Node.js >= 20.12.0
+- Claude Code installed and logged in: `claude` — see https://docs.anthropic.com/en/docs/claude-code/quickstart
+- A Feishu / Lark PersonalAgent app (the first-run wizard can create one)
 
-## Working directories
+### Install
 
-Each profile may define a default working directory through `workspaces.default`. New profiles may be created with `--workspace <path>`; if omitted, the bridge creates a profile-managed default working directory.
+```bash
+git clone https://github.com/your-org/lark-channel-bridge-team.git
+cd lark-channel-bridge-team
+pnpm install
+pnpm build
+```
 
-This is a profile-field snippet. Do not replace the whole `config.json` with it; edit the matching profile's `workspaces` field.
+### First run
+
+```bash
+node dist/bin.js run
+```
+
+### Enable multi-user mode
+
+Edit `~/.lark-channel/config.json` and add to the active profile:
 
 ```json
 {
-  "workspaces": {
-    "default": "/Users/me/.lark-channel-workspaces/claude/default"
+  "multiUser": {
+    "enabled": true,
+    "workspaceRoot": "/workspace"
   }
 }
 ```
 
-The bridge checks that a selected directory exists, is a directory, and is not an overly broad location such as `/`, the home root, a system directory, or a temp root. The working directory is only the current directory for an agent run. It is not a filesystem sandbox; actual file access still depends on the local agent process and its permission mode.
+Ensure the root directory exists and is writable by the bridge process:
 
-## Permission modes
-
-The recommended user-facing profile config is `permissions.defaultAccess` and `permissions.maxAccess`. New profiles default to `full` for both values so the bridge can keep local tools, authorization flows, file writes, and other agent features fully usable. To tighten a profile, set one or both values to `workspace` or `read-only`; stricter modes can limit local tool execution, login/authorization flows, file writes, and similar capabilities.
-
-This is a profile-field snippet. Do not replace the whole `config.json` with it; edit the matching profile's `permissions` field.
-
-```json
-{
-  "permissions": {
-    "defaultAccess": "full",
-    "maxAccess": "full"
-  }
-}
+```bash
+mkdir -p /workspace
 ```
 
-Mode mapping:
+Restart the bridge. The next user to DM the bot will be automatically onboarded.
 
-| Bridge access | Claude permission mode | Codex mode |
-|---|---|---|
-| `full` | `bypassPermissions` | `danger-full-access` |
-| `workspace` | `acceptEdits` | `workspace-write` |
-| `read-only` | `plan` | `read-only` |
+### Custom onboarding content
 
-The legacy `sandbox` field is still readable for old configs. After the bridge saves the profile, it migrates that setting to canonical `permissions`.
+Place an `onboarding.md` file in the bridge config directory. Supported placeholders:
+
+```
+{name}        User's Feishu display name
+{workspace}   Absolute path to the user's workspace
+{pinyinDir}   Workspace directory name (pinyin of the user's name)
+```
+
+---
 
 ## Data directories
 
 | Path | Content |
-|---|---|
-| `~/.lark-channel/config.json` | Root config with profiles and active profile |
-| `~/.lark-channel/active-profile` | Last selected profile |
+|------|---------|
+| `~/.lark-channel/config.json` | Root config (profiles + active profile) |
 | `~/.lark-channel/profiles/<profile>/sessions.json` | Session state |
-| `~/.lark-channel/profiles/<profile>/sessions.json.catalog.json` | Agent-aware session catalog |
-| `~/.lark-channel/profiles/<profile>/workspaces.json` | Current and named workspace bindings |
-| `~/.lark-channel/profiles/<profile>/secrets.enc` | Profile-local encrypted secrets |
+| `~/.lark-channel/profiles/<profile>/workspaces.json` | Workspace bindings |
+| `~/.lark-channel/profiles/<profile>/users.json` | Multi-user registry (multi-user mode) |
 | `~/.lark-channel/profiles/<profile>/lark-cli/` | Profile-local lark-cli directory |
-| `~/.lark-channel/profiles/<profile>/media/` | Attachment cache |
 | `~/.lark-channel/profiles/<profile>/logs/` | Structured run logs |
-| `~/.lark-channel/registry/processes.json` | Local process registry |
-| `~/.lark-channel/registry/locks/` | Profile and app locks |
+| `/workspace/<pinyinDir>/` | User personal workspace (multi-user mode) |
+| `/workspace/<pinyinDir>/CLAUDE.md` | Workspace conventions |
+| `/workspace/<pinyinDir>/user.md` | User identity info |
+| `/workspace/<pinyinDir>/CC-Memory/` | User long-term memory directory |
+| `/workspace/<pinyinDir>/projects/` | User project directory |
 
-Set `LARK_CHANNEL_HOME=/path/to/state` to move all local bridge state. `LARK_CHANNEL_LOG_DAYS` overrides log retention.
+---
 
-## Access control
+## Permission modes
 
-**Chat access is private by default: out of the box, only *you* can use the bot in DMs and groups.** "You" = whoever created / owns the Feishu app (the person who scanned the QR to set it up). The bot figures out who the app owner is automatically from Feishu, so **solo chat use needs zero configuration** — you can DM it and `@`-mention it in any group, and everyone else's chat messages are silently ignored (no "permission denied" reply, which would only confirm the bot exists). Cloud-doc comments are document-scoped; see below.
+| Bridge access | Claude permission mode |
+|---------------|----------------------|
+| `full` | `bypassPermissions` |
+| `workspace` | `acceptEdits` |
+| `read-only` | `plan` |
 
-To let other people or groups in, add them to one of three lists:
+---
 
-| List | Controls | Add | Remove |
-|------|----------|-----|--------|
-| **Allowed users** | who can DM the bot | `/invite user @them` | `/remove user @them` |
-| **Allowed chats** | which groups the bot answers in (for **everyone** in them) | `/invite group` (current group) / `/invite all group` (every group the bot is in) | `/remove group` (current group) |
-| **Admins** | who can change settings, and use the bot in any group | `/invite admin @them` | `/remove admin @them` |
+## Acknowledgements
 
-> `/invite` and `/remove` can only be run by **you (the creator) and admins**. The `@` in the command points at the *target person* (not the bot) — the bot resolves the mention to their identity, so you never deal with raw IDs.
+This project is built on top of [zhangzara/lark-channel-bridge](https://github.com/zhangzara/lark-channel-bridge) under the MIT license. Thank you zhangzara for creating such a solid foundation for bridging Feishu with local AI agents, and for welcoming community forks.
 
-### Two identities that bypass everything
-
-- **You (the creator)**: subject to no list at all — DMs, any group, every command. You **can never lock yourself out**: even if the lists get messed up, DM the bot and send `/config` to get back in. Transfer the app's ownership in the Feishu console and the bot follows the new owner automatically.
-- **Admins**: can DM, run management commands like `/config`, and **bypass the allowed-chats list** — the bot answers them in any group, listed or not. Good for teammates who co-maintain the bot.
-
-### Common setups
-
-- **Just me** → nothing to do; this is the default.
-- **Let a teammate DM the bot** → `/invite user @them`
-- **Open a work group to everyone in it** → send `/invite group` inside that group
-- **First-time setup, onboard every group the bot is already in** → `/invite all group` pulls them all into the list at once; trim with `/remove group` afterwards
-- **Add a co-admin** → `/invite admin @them`
-
-### Worth knowing
-
-- Changes take effect on the **next message** — no restart needed.
-- **In groups you must `@` the bot first** (DMs don't need it). That's a separate toggle (`/config` → "require @ in groups"), independent of the lists above.
-- Strangers get pure silence — no reply at all. The one exception: if someone `@`-mentions the bot in a group that hasn't been opened up, the bot posts a friendly one-liner telling them an admin can run `/invite group` to enable it.
-- Cloud-doc comments are document-scoped: anyone who can comment in a supported document and mention the bot can trigger a reply.
-
-### Advanced: editing the config file directly
-
-If you'd rather not do it inside Feishu, `/invite` and `/config` write the matching profile's `access` field in `~/.lark-channel/config.json`. Empty lists mean nobody from that list, not open access. This is a profile-field snippet; do not replace the whole `config.json` with it:
-
-```json
-{
-  "schemaVersion": 2,
-  "profiles": {
-    "claude": {
-      "agentKind": "claude",
-      "access": {
-        "allowedUsers": ["ou_xxxxxxxxxxxxx"],
-        "allowedChats": ["oc_xxxxxxxxxxxxx"],
-        "admins": ["ou_xxxxxxxxxxxxx"],
-        "requireMentionInGroup": true
-      }
-    }
-  }
-}
-```
-
-`allowedUsers` / `admins` take user `open_id`s; `allowedChats` takes group `chat_id`s. The easiest way to find an ID by hand: have the person message the bot (or `@` it in the group), then check the active profile's log:
-
-```bash
-grep '"event":"enter"' ~/.lark-channel/profiles/<profile>/logs/bridge-$(date +%Y%m%d).jsonl | tail -5
-```
-
-Each line carries `chatId` (group / DM id) and `senderId` (user `open_id`). After a manual edit, **restart the bridge** or send `/reconnect` from an allowed admin context to apply it. For day-to-day tweaks `/invite` / `/config` are easier; direct edits are mainly for deployment scripts that pre-seed access.
-
-## Cloud-doc comments
-
-Cloud-doc comments do not need a separate workspace binding or document allowlist. In supported document comments, mention the bot and the bridge replies in the same thread. Comment runs reuse the document session key and fall back to the user home directory when no document cwd was previously recorded.
-
-## FAQ
-
-**The bot stays silent or the local CLI never replies.** Usually the local `claude` or `codex` CLI is not logged in, or the current session points to a working directory that no longer exists. Send `/status` to inspect; `/new` often fixes it by starting a fresh session.
-
-**The agent subprocess looks frozen (card stuck on the last frame).** The bridge supports an idle watchdog: if the agent emits nothing for N minutes, the process is killed and the card is annotated with the auto-termination reason. Disabled by default. Enable with `/config` globally, or `/timeout 10` for the current session; `/timeout off` disables it for the session; `/timeout default` clears the session override.
-
-**The agent says it cannot see an image I sent.** Upgrade to the latest version. Releases before 0.1.0 had a filename-dedup bug.
-
-## Testing and CI
-
-Local checks:
-
-```bash
-pnpm test
-pnpm typecheck
-pnpm build
-```
-
-`pnpm test` includes unit, integration, and process-level adapter tests. CI runs on macOS, Ubuntu, and Windows with `pnpm install --frozen-lockfile`, `pnpm test`, `pnpm typecheck`, and `pnpm build`.
-
-## Optional telemetry
-
-By default the bridge reports **nothing**: no metrics, no logs leave your machine, and it pulls in zero telemetry dependencies. The hook below is inert unless you opt in.
-
-To wire up your own monitoring, point an environment variable at a module that default-exports (or exports `createAdapter`) an `AdapterFactory`:
-
-```bash
-LARK_CHANNEL_TELEMETRY_MODULE=your-telemetry-package lark-channel-bridge start
-```
-
-That module receives every `log.*` event plus error/metric hooks and forwards them wherever you like. The interface is exported from the package root:
-
-```ts
-import type { AdapterFactory, TelemetryAdapter, TelemetryEvent } from 'lark-channel-bridge';
-
-const createAdapter: AdapterFactory = (meta) => ({
-  emit(event) {/* ship event */},
-  recordError(err, ctx) {/* ship exception */},
-  recordMetric(name, value, tags) {/* ship metric */},
-  flush(timeoutMs) {/* drain buffered events */},
-});
-export default createAdapter;
-```
-
-A missing module, a bad factory, or a throwing adapter all degrade to noop — telemetry can never stop the bridge from starting or break logging.
+---
 
 ## License
 
 [MIT](./LICENSE)
-
-<img src="./assets/feedback-group-qr.png" alt="Feedback group QR code" width="360">

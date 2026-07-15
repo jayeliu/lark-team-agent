@@ -24,6 +24,8 @@ export interface SubmitRunInput {
   images?: readonly string[];
   stopGraceMs?: number;
   nowait?: boolean;
+  /** Per-user lark-cli config dir, forwarded to AgentRunOptions.userLarkCliConfigDir. */
+  userLarkCliConfigDir?: string;
   observability?: {
     profile: string;
     agent: string;
@@ -104,6 +106,7 @@ export class RunExecutor {
       sandbox: input.policy.sandbox,
       permissionMode: input.policy.permissionMode,
       stopGraceMs: input.stopGraceMs,
+      userLarkCliConfigDir: input.userLarkCliConfigDir,
     };
     let run: AgentRun;
     try {

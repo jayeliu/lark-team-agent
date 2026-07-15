@@ -45,6 +45,12 @@ export interface AgentRunOptions {
    * are adapter-specific.
   */
   stopGraceMs?: number;
+  /**
+   * Per-user lark-cli config directory. When set, the agent subprocess inherits
+   * this as LARKSUITE_CLI_CONFIG_DIR so lark-cli reads and writes the OAuth token
+   * belonging to the requesting user, rather than a shared bot or default identity.
+   */
+  userLarkCliConfigDir?: string;
 }
 
 export interface AgentRun {
