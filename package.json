@@ -1,7 +1,7 @@
 {
   "name": "lark-channel-bridge-team",
-  "version": "0.4.1",
-  "description": "Multi-user team edition of lark-channel-bridge",
+  "version": "0.5.8",
+  "description": "Multi-user team edition of lark-channel-bridge (upstream 0.5.8)",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "publishConfig": {
@@ -47,7 +47,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.4.0",
-    "@larksuite/channel": "^0.2.0",
+    "@larksuite/channel": "^0.4.0",
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
     "graceful-fs": "^4.2.11",

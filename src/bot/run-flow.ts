@@ -1,4 +1,5 @@
 import type { AgentCapability } from '../agent/capability';
+import { resolveModelArg } from '../agent/models';
 import type { AgentEvent } from '../agent/types';
 import type { ProfileConfig } from '../config/profile-schema';
 import type { AccessDecision } from '../policy/access';
@@ -145,7 +146,10 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
       policy,
       sessionId,
       threadId,
-      model: (input.sessions.getScopeModel(input.scopeId) || input.profileConfig.preferences.model?.trim()) || undefined,
+      model: input.sessions.getScopeModel(input.scopeId) ?? resolveModelArg(
+        input.profileConfig.agentKind,
+        input.profileConfig.preferences.model,
+      ),
       images:
         input.capability.agentId === 'codex'
           ? policy.attachments

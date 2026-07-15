@@ -105,6 +105,13 @@ export interface AppPreferences {
    */
   showToolCalls?: boolean;
   /**
+   * Model the underlying agent runs with, forwarded as `--model`. The catalog
+   * of valid values is agent-kind specific — see `agent/models.ts`. `undefined`
+   * or the `'default'` sentinel means "don't pass `--model`" so the agent
+   * CLI / account default applies. Default: unset.
+   */
+  model?: string;
+  /**
    * Whether to send a separate Lark COT process message before the final
    * answer. `brief` mirrors the lightweight tool/progress visibility from
    * the legacy tool display; `detailed` also includes tool args/output.
@@ -145,12 +152,6 @@ export interface AppPreferences {
    * Range 100-30000; out-of-range values fall back to default.
    */
   agentStopGraceMs?: number;
-  /**
-   * Override the Claude model passed via `--model` to each run.
-   * When set, takes precedence over the ANTHROPIC_MODEL env var.
-   * Use `/model <name>` to set, `/model` to show current value.
-   */
-  model?: string;
 }
 
 /**
