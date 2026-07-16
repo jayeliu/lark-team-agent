@@ -4,7 +4,7 @@ import type {
   NormalizedMessage,
 } from '@larksuite/channel';
 import { createLarkChannel } from '@larksuite/channel';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { claudeCapability, codexCapability } from '../agent/capability';
 import { modelLabel, normalizeModelSelection, resolveModelArg } from '../agent/models';
 import {
@@ -75,7 +75,7 @@ import {
 import { UserRegistry } from '../multi-user/user-registry';
 import { buildWelcomeMessage } from '../multi-user/onboarding';
 import { UserTokenRegistry } from '../multi-user/user-token-registry';
-import { buildOAuthPromptCard } from '../card/oauth-prompt-card';
+import { buildOAuthPromptMarkdown } from '../card/oauth-prompt-card';
 
 const DEBOUNCE_MS = 600;
 const STREAM_TERMINAL_GRACE_MS = 3000;
@@ -317,7 +317,21 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     const baseDir = join(dirname(deps.appPaths.secretsFile), 'user-tokens');
     userTokenRegistry = new UserTokenRegistry({
       baseDir,
-      larkEnv: buildLarkChannelBridgeEnv(),
+      larkEnv: {
+        ...buildLarkChannelBridgeEnv(),
+        // Include bridge lark-channel env so 'lark-cli config bind --source lark-channel'
+        // can find the source config projection via LARK_CHANNEL_CONFIG.
+        // Derived from secretsFile: <rootDir>/profiles/<profile>/secrets.enc
+        ...(deps.appPaths ? (() => {
+          const profileDir = dirname(deps.appPaths!.secretsFile);
+          return {
+            LARK_CHANNEL: '1',
+            LARK_CHANNEL_HOME: dirname(dirname(profileDir)),
+            LARK_CHANNEL_PROFILE: basename(profileDir),
+            LARK_CHANNEL_CONFIG: join(profileDir, 'lark-cli-source', 'config.json'),
+          };
+        })() : {}),
+      },
     });
     await userTokenRegistry.load();
   }
@@ -1015,16 +1029,17 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         const authResult = await userTokenRegistry.startAuth(senderId, {
           appId: appId ?? controls.profileConfig.accounts.app.id,
           brand: appBrand ?? controls.profileConfig.accounts.app.tenant,
+          extraArgs: ['--recommend'],
         });
         const expiresInMinutes = authResult.expiresIn
           ? Math.max(1, Math.round(authResult.expiresIn / 60))
           : undefined;
-        const authCard = buildOAuthPromptCard({
+        const authMarkdown = buildOAuthPromptMarkdown({
           verificationUrl: authResult.verificationUrl,
           expiresInMinutes,
         });
-        // Send the auth card to the user's private chat (open_id routing).
-        await channel.send(senderId, { card: authCard });
+        // Send the auth prompt to the user's private chat (open_id routing).
+        await channel.send(senderId, { markdown: authMarkdown });
         // Notify in the current chat that auth is required.
         await channel.send(chatId, {
           markdown: '🔐 需要飞书授权才能以你的身份操作文档，授权链接已私信发给你，完成后请重新发送消息。',

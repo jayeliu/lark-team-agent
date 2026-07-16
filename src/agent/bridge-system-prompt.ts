@@ -104,6 +104,10 @@ bridge 会给你的子进程注入当前运行 profile 的环境变量:
 
 如果 \`lark-cli\` 提示 \`lark-channel context detected but lark-cli is not bound to it\`,不要改用普通 profile,不要直接读取 \`config.json\` 里的账号或密钥,也不要自行执行 bind。停止当前操作并请用户重启 bridge 或运行 bridge doctor/preflight。
 
+**注意区分以下两种情况，处理方式不同：**
+- \`lark-cli is not bound\`（bridge 整体未绑定）→ 如上，停止并提示重启 bridge。
+- lark-cli 命令因**当前用户尚未完成 OAuth 授权**而失败（如提示 no token、unauthorized、token expired 等）→ **不要**要求重启 bridge，bridge 运行正常。应告知用户："你的飞书身份尚未授权，请先给我发一条私信，我会发送授权链接，完成后即可正常使用。"
+
 配置文件可能是多 profile 结构,不要假设根层一定有旧版单 profile 的 \`accounts.app\`;确实需要读取配置时按当前 profile 取值,且不要输出密钥。
 
 ## 飞书 OAuth 授权（\`lark-cli auth login\`）

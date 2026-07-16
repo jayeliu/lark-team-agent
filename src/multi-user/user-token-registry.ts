@@ -116,14 +116,36 @@ export class UserTokenRegistry {
       extraArgs?: string[];
     },
   ): Promise<{ verificationUrl: string; expiresIn?: number }> {
+    // bindDir = parent for 'config bind --source lark-channel'
+    // authDir = lark-channel profile dir for all auth/runtime commands (LARKSUITE_CLI_CONFIG_DIR)
     const configDir = this.ensureUserDir(senderId);
-    await mkdir(join(configDir, 'lark-channel'), { recursive: true });
+    const authDir = join(configDir, 'lark-channel');
+    await mkdir(authDir, { recursive: true });
 
-    // Merge bridge env + per-user config dir override
-    const env: Record<string, string> = {
+    // Merge process.env first so PATH, HOME, etc. are inherited by subprocesses.
+    // Then overlay larkEnv (bridge context vars) and finally LARKSUITE_CLI_CONFIG_DIR.
+    const processEnv = process.env as Record<string, string>;
+    // bindEnv: needs LARK_CHANNEL=1 + bridge env so 'config bind --source lark-channel'
+    // can find the source config projection. Points to parent dir so bind writes
+    // lark-channel/config.json inside it.
+    const bindEnv: Record<string, string> = {
+      ...processEnv,
       ...this.larkEnv,
       LARKSUITE_CLI_CONFIG_DIR: configDir,
     };
+    // authEnv: must NOT carry LARK_CHANNEL=1 or other bridge-context vars.
+    // When LARK_CHANNEL=1 is set, lark-cli enters bridge-context mode and checks
+    // that the config dir is a bridge-bound projection — per-user token dirs are not,
+    // so it returns "not bound". Auth commands run as plain lark-cli using only
+    // LARKSUITE_CLI_CONFIG_DIR. Remove all keys that larkEnv would overlay — derived
+    // dynamically from this.larkEnv so future additions are covered automatically.
+    const authEnv: Record<string, string> = { ...processEnv };
+    for (const k of Object.keys(this.larkEnv)) delete authEnv[k];
+    // Also strip LARKSUITE_CLI_CONFIG_DIR from process.env if the bridge set it.
+    delete authEnv['LARKSUITE_CLI_CONFIG_DIR'];
+    authEnv['LARKSUITE_CLI_CONFIG_DIR'] = authDir;
+    // Alias used by runDeviceCodeWaiter and applyIdentityPolicy
+    const env: Record<string, string> = authEnv;
 
     // Bind lark-cli to this user's config dir first
     try {
@@ -133,10 +155,9 @@ export class UserTokenRegistry {
           'config', 'bind',
           '--source', 'lark-channel',
           '--identity', 'user-default',
-          '--app-id', opts.appId,
-          ...(opts.brand ? ['--brand', opts.brand] : []),
+          '--force',
         ],
-        { env: env as NodeJS.ProcessEnv },
+        { env: bindEnv as NodeJS.ProcessEnv },
       );
     } catch (err) {
       log.warn('user-token-registry', 'bind-failed', {
@@ -180,6 +201,12 @@ export class UserTokenRegistry {
     // Mark as pending
     this.data[senderId] = {
       openId: senderId,
+      // Store the PARENT dir, not authDir. At runtime the Claude/Codex subprocess
+      // is launched with LARK_CHANNEL=1 set, and lark-cli's bridge-context mode
+      // appends '/lark-channel' itself when resolving the bound config — passing
+      // authDir directly double-nests the path and lark-cli reports "not bound".
+      // ensureUserDir() also relies on this being the parent dir on retry, or a
+      // second startAuth() call nests the path one level deeper each time.
       larkCliConfigDir: configDir,
       status: 'pending',
       initiatedAt: new Date().toISOString(),
@@ -187,9 +214,11 @@ export class UserTokenRegistry {
     this.schedulePersist();
 
     // Spawn the blocking device-code waiter in the background
+    const waiterPromise = this.runDeviceCodeWaiter(senderId, deviceCode, authDir, env);
+    waiterPromise.catch(() => {});  // prevent unhandledRejection when timeout/failure occurs
     this.authWaiters.set(
       senderId,
-      this.runDeviceCodeWaiter(senderId, deviceCode, configDir, env).finally(() => {
+      waiterPromise.finally(() => {
         this.authWaiters.delete(senderId);
       }),
     );
@@ -229,7 +258,7 @@ export class UserTokenRegistry {
   private runDeviceCodeWaiter(
     senderId: string,
     deviceCode: string,
-    configDir: string,
+    authDir: string,
     env: Record<string, string>,
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
@@ -264,7 +293,7 @@ export class UserTokenRegistry {
           }
 
           // Apply identity policy: strict-mode off + default-as auto
-          void this.applyIdentityPolicy(configDir, env).catch((policyErr) => {
+          void this.applyIdentityPolicy(authDir, env).catch((policyErr) => {
             log.warn('user-token-registry', 'identity-policy-failed', {
               senderId: senderId.slice(-6),
               err: String(policyErr),
@@ -284,8 +313,8 @@ export class UserTokenRegistry {
     });
   }
 
-  private async applyIdentityPolicy(configDir: string, env: Record<string, string>): Promise<void> {
-    const e = { ...env, LARKSUITE_CLI_CONFIG_DIR: configDir } as NodeJS.ProcessEnv;
+  private async applyIdentityPolicy(authDir: string, env: Record<string, string>): Promise<void> {
+    const e = { ...env, LARKSUITE_CLI_CONFIG_DIR: authDir } as NodeJS.ProcessEnv;
     await execFileAsync('lark-cli', ['config', 'strict-mode', 'off'], { env: e });
     await execFileAsync('lark-cli', ['config', 'default-as', 'auto'], { env: e });
   }
