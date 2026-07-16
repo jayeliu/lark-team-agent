@@ -319,7 +319,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       baseDir,
       larkEnv: {
         ...buildLarkChannelBridgeEnv(),
-        // Include bridge lark-channel env so 'lark-cli config bind --source lark-channel'
+        // Include bridge lark-channel env so the per-user config bind step
         // can find the source config projection via LARK_CHANNEL_CONFIG.
         // Derived from secretsFile: <rootDir>/profiles/<profile>/secrets.enc
         ...(deps.appPaths ? (() => {
