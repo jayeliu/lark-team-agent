@@ -1,7 +1,7 @@
 {
   "name": "lark-channel-bridge-team",
-  "version": "0.5.8",
-  "description": "Multi-user team edition of lark-channel-bridge (upstream 0.5.8)",
+  "version": "0.5.9",
+  "description": "Multi-user team edition of lark-channel-bridge (upstream 0.5.9)",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "publishConfig": {
