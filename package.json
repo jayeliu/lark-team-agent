@@ -10,12 +10,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Unipus-PM/lark-team-agent.git"
+    "url": "git+https://github.com/Fengzhaopeng/lark-team-agent.git"
   },
   "bugs": {
-    "url": "https://github.com/Unipus-PM/lark-team-agent/issues"
+    "url": "https://github.com/Fengzhaopeng/lark-team-agent/issues"
   },
-  "homepage": "https://github.com/Unipus-PM/lark-team-agent#readme",
+  "homepage": "https://github.com/Fengzhaopeng/lark-team-agent#readme",
   "bin": {
     "lark-team-agent": "./bin/lark-channel-bridge.mjs",
     "lark-channel-bridge": "./bin/lark-channel-bridge.mjs"
