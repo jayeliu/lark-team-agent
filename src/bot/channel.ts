@@ -76,6 +76,7 @@ import { UserRegistry } from '../multi-user/user-registry';
 import { buildWelcomeMessage } from '../multi-user/onboarding';
 import { UserTokenRegistry } from '../multi-user/user-token-registry';
 import { buildOAuthPromptMarkdown } from '../card/oauth-prompt-card';
+import { maybeRefreshCapabilityCache } from '../anthropic/model-probe';
 
 const DEBOUNCE_MS = 600;
 const STREAM_TERMINAL_GRACE_MS = 3000;
@@ -534,6 +535,10 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     procId: controls.processId,
   });
   console.log('正在监听消息。按 Ctrl+C 退出。\n');
+
+  // Background: auto-refresh model capability cache (miss or >7d old).
+  const probeCachePath = join(dirname(controls.configPath), 'profiles', controls.profile, 'model-capabilities.json');
+  void maybeRefreshCapabilityCache(probeCachePath);
 
   // App-level keepalive: 15s probe + wake-up detection + HTTP reachability.
   // Defense-in-depth — the SDK's pingTimeout watchdog handles half-dead WS,

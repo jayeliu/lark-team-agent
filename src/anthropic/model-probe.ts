@@ -190,3 +190,33 @@ export function getModelsWithCapability(
     .filter((m) => m.capabilities.includes(capability))
     .map((m) => m.modelId);
 }
+
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/**
+ * Auto-refresh the capability cache if missing or older than 7 days.
+ * Runs silently in the background — never throws, logs to stderr on error.
+ * Call once after bridge connects; subsequent calls are no-ops if cache is fresh.
+ */
+export async function maybeRefreshCapabilityCache(
+  cachePath: string,
+  opts: ProbeOptions = {},
+): Promise<void> {
+  try {
+    const existing = await loadCapabilityCache(cachePath);
+    if (existing) {
+      const age = Date.now() - new Date(existing.probedAt).getTime();
+      if (age < CACHE_TTL_MS) return; // still fresh
+    }
+
+    const { fetchModels } = await import('./models.js');
+    const listResult = await fetchModels({ baseUrl: opts.baseUrl, apiKey: opts.apiKey });
+    if (!listResult.ok) return;
+
+    const modelIds = listResult.models.map((m) => m.id);
+    const records = await probeAllModels(modelIds, opts);
+    await saveCapabilityCache(cachePath, records);
+  } catch {
+    // silently ignore — this is best-effort background work
+  }
+}
