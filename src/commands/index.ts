@@ -88,7 +88,7 @@ import type { WorkspaceStore } from '../workspace/store';
 import { createBoundChat, defaultChatName } from '../bot/group';
 import { fetchKnownChats, type KnownChat } from '../bot/lark-info';
 import { applyLarkCliIdentityPolicy, hasStructuredLarkCliUserAuth } from '../lark-cli/identity-policy';
-import { fetchModels, formatFetchModelsError, groupModels } from '../anthropic/models';
+import { fetchModels, filterChatModels, formatFetchModelsError, groupModels } from '../anthropic/models';
 
 export interface Controls {
   profile: string;
@@ -884,8 +884,9 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
     const scopeModel = ctx.sessions.getScopeModel(ctx.scope);
     const globalModel = getModel(ctx.controls.cfg);
     const current = scopeModel ?? globalModel;
-    const groups = groupModels(result.models);
-    const lines: string[] = [`**可用模型列表**（共 ${result.models.length} 个）\n`];
+    const chatModels = filterChatModels(result.models);
+    const groups = groupModels(chatModels);
+    const lines: string[] = [`**可用模型列表**（共 ${chatModels.length} 个，已过滤 embedding / 图像生成等不可用类型）\n`];
     for (const group of groups) {
       lines.push(`**${group.label}**`);
       for (const m of group.models) {

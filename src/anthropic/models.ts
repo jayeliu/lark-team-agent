@@ -129,15 +129,27 @@ export function formatFetchModelsError(error: FetchModelsError): string {
 
 // ── Model grouping ──────────────────────────────────────────────────────────
 
+/** Patterns for model IDs that cannot be used as Claude Code `--model` arguments. */
+const UNSUPPORTED_PATTERNS = [
+  /embedding/i,
+  /^(gpt-image|dall-e)/i,
+  /^doubao-seed(ance|ream|video)/i,
+  /^(hy\d|seedance|seedream|seedvideo)/i,
+];
+
+/** Filter out model IDs that are known to be incompatible with Claude Code CLI. */
+export function filterChatModels(models: ModelInfo[]): ModelInfo[] {
+  return models.filter((m) => !UNSUPPORTED_PATTERNS.some((p) => p.test(m.id)));
+}
+
 const MODEL_GROUP_RULES: Array<{ label: string; pattern: RegExp }> = [
-  { label: 'Claude',           pattern: /^claude-/i },
-  { label: 'GPT',              pattern: /^gpt-/i },
-  { label: 'DeepSeek',         pattern: /^deepseek-/i },
-  { label: 'Qwen',             pattern: /^qwen/i },
-  { label: 'GLM / Doubao',     pattern: /^(glm-|doubao-|seed)/i },
-  { label: 'Kimi',             pattern: /^(kimi-|moonshot-)/i },
-  { label: 'MiniMax',          pattern: /^minimax/i },
-  { label: 'Embeddings',       pattern: /embedding/i },
+  { label: 'Claude',       pattern: /^(claude-|global\.|us\.anthropic\.)/i },
+  { label: 'GPT',          pattern: /^gpt-/i },
+  { label: 'DeepSeek',     pattern: /^deepseek-/i },
+  { label: 'Qwen',         pattern: /^qwen/i },
+  { label: 'GLM / Doubao', pattern: /^(glm-|doubao-|seed)/i },
+  { label: 'Kimi',         pattern: /^(kimi-|moonshot-)/i },
+  { label: 'MiniMax',      pattern: /^minimax/i },
 ];
 
 export interface ModelGroup {
