@@ -4,7 +4,7 @@
 
 [中文 README](./README.zh.md)
 
-A team-grade bot that bridges Feishu / Lark messenger with local Claude Code or Codex CLI. On top of the original bridge, it adds **multi-user workspace isolation** and **first-contact onboarding** — designed for teams that want to share a single deployed bot while keeping each member's sessions, working directories, and memory completely separate.
+A team-grade bot that bridges Feishu / Lark messenger with local Claude Code or Codex CLI. It extends the original bridge with **multi-user workspace isolation** and **first-contact onboarding**, so the whole team can share one deployed bot while each member keeps their own isolated session, working directory, and memory.
 
 ---
 
@@ -19,22 +19,13 @@ A team-grade bot that bridges Feishu / Lark messenger with local Claude Code or 
 
 ---
 
-## Core problems solved
+## Team use-case extensions
 
-The original bridge is a personal tool for a single developer. When shared across a team:
-
-1. **Session cross-contamination** — everyone shares one session and interferes with each other
-2. **Working directory conflicts** — `/cd` changes the directory for everyone simultaneously
-3. **No user attribution** — logs and memory files are intermixed with no way to trace who did what
-4. **No onboarding** — new members have no idea what the bot can do or how to use it
-
-This fork solves all four with a **multi-user architecture**: the first time a user DMs the bot, their workspace is automatically initialized; all subsequent operations stay inside their own space.
-
----
-
-## Added features
+Built on top of the original bridge, this project extends it for **team scenarios** where multiple people share one deployed bot. The key additions:
 
 ### Multi-user workspace isolation
+
+Each team member gets a fully isolated environment — their own session, working directory, and long-term memory. No one's work interferes with anyone else's.
 
 - **Auto-init on first contact**: when a user DMs the bot for the first time, the bridge reads their Feishu display name, converts it to a pinyin directory name, and creates a personal workspace under `workspaceRoot`
 - **Directory layout**: each user workspace contains `projects/` and `CC-Memory/`
@@ -54,6 +45,8 @@ Enable in your profile config:
 ```
 
 ### First-contact onboarding
+
+New team members are greeted automatically — no manual setup or documentation-hunting required.
 
 - After workspace initialization, the bot sends a welcome message introducing its capabilities and available commands
 - Supports an external `onboarding.md` file for custom content, with `{name}`, `{workspace}`, and `{pinyinDir}` placeholders
