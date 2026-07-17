@@ -1,7 +1,7 @@
 {
-  "name": "lark-channel-bridge-team",
+  "name": "lark-team-agent",
   "version": "0.5.9",
-  "description": "Multi-user team edition of lark-channel-bridge (upstream 0.5.9)",
+  "description": "Team-grade Feishu/Lark bridge for local Claude Code / Codex CLI agents, with multi-user workspace isolation",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "publishConfig": {
@@ -10,13 +10,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zarazhangrui/feishu-claude-code-bridge.git"
+    "url": "git+https://github.com/Unipus-PM/lark-team-agent.git"
   },
   "bugs": {
-    "url": "https://github.com/zarazhangrui/feishu-claude-code-bridge/issues"
+    "url": "https://github.com/Unipus-PM/lark-team-agent/issues"
   },
-  "homepage": "https://github.com/zarazhangrui/feishu-claude-code-bridge#readme",
+  "homepage": "https://github.com/Unipus-PM/lark-team-agent#readme",
   "bin": {
+    "lark-team-agent": "./bin/lark-channel-bridge.mjs",
     "lark-channel-bridge": "./bin/lark-channel-bridge.mjs"
   },
   "exports": {
