@@ -1,10 +1,10 @@
-# lark-channel-bridge-team
+# lark-team-agent
 
-> This project is a fork of [zhangzara/lark-channel-bridge](https://github.com/zhangzara/lark-channel-bridge), extended under the MIT license. Big thanks to zhangzara for building this excellent bridge and for openly encouraging community forks — this project wouldn't exist without that spirit.
+> This project is a fork of [zarazhangrui/feishu-claude-code-bridge](https://github.com/zarazhangrui/feishu-claude-code-bridge), extended under the MIT license. Big thanks to zarazhangrui for building this excellent bridge and for openly encouraging community forks — this project wouldn't exist without that spirit.
 
 [中文 README](./README.zh.md)
 
-A team-grade bot that bridges Feishu / Lark messenger with local Claude Code CLI. On top of the original bridge, it adds multi-user workspace isolation, first-contact onboarding, and dynamic model switching — designed for teams that want to share a single deployed bot while keeping each member's sessions, working directories, and memory completely separate.
+A team-grade bot that bridges Feishu / Lark messenger with local Claude Code or Codex CLI. On top of the original bridge, it adds **multi-user workspace isolation** and **first-contact onboarding** — designed for teams that want to share a single deployed bot while keeping each member's sessions, working directories, and memory completely separate.
 
 ---
 
@@ -32,11 +32,9 @@ This fork solves all four with a **multi-user architecture**: the first time a u
 
 ---
 
-## Feature overview
+## Added features
 
-### New features
-
-#### Multi-user workspace isolation
+### Multi-user workspace isolation
 
 - **Auto-init on first contact**: when a user DMs the bot for the first time, the bridge reads their Feishu display name, converts it to a pinyin directory name, and creates a personal workspace under `workspaceRoot`
 - **Directory layout**: each user workspace contains `projects/` and `CC-Memory/`
@@ -55,39 +53,17 @@ Enable in your profile config:
 }
 ```
 
-#### First-contact onboarding
+### First-contact onboarding
 
 - After workspace initialization, the bot sends a welcome message introducing its capabilities and available commands
 - Supports an external `onboarding.md` file for custom content, with `{name}`, `{workspace}`, and `{pinyinDir}` placeholders
-- Built-in default content covers: capability overview, command reference table, and CC-Memory usage guide
-
-#### Dynamic model switching (`/model`)
-
-| Command | Effect |
-|---------|--------|
-| `/model` | Show the current model |
-| `/model list` | Query available models from the API, grouped by family, with the current model marked |
-| `/model <name>` | Switch to the named model; takes effect on the next message |
-| `/model reset` | Restore the default model (controlled by `ANTHROPIC_MODEL` env var) |
-
-- Model setting is persisted to `config.json` and survives restarts
-- In-memory state is updated immediately — no bridge restart needed
-- `/model list` calls `/v1/models` and supports the official Anthropic API and compatible proxies
-
-#### Reusable model-query module (`src/anthropic/models`)
-
-A standalone module for any project that needs to enumerate models:
-
-- `fetchModels(opts?)` — queries `/v1/models`, never throws, returns a typed result union
-- `groupModels(models)` — groups by family (Claude / GPT / DeepSeek / Qwen / GLM / Kimi / MiniMax / Embeddings / Other)
-- `formatFetchModelsError(error)` — human-readable error messages
-- Built-in 10 s timeout with proper AbortController cleanup; full error codes: `missing-api-key` / `timeout` / `network-error` / `http-error` / `parse-error`
+- Built-in default content covers: capability overview, command reference, and CC-Memory usage guide
 
 ---
 
-### Original features (fully preserved)
+## Original features (fully preserved)
 
-#### Message forwarding
+### Message forwarding
 
 - Send a DM directly, or `@bot` in a group, to forward tasks to local Claude Code or Codex CLI
 - **Streaming card**: text replies and tool calls update in real time on a single Lark card
@@ -95,7 +71,7 @@ A standalone module for any project that needs to enumerate models:
 - **Session continuity**: each chat, topic, or document comment thread keeps its own session
 - **Queuing and batching**: messages sent in quick succession are handled together; messages during a run queue for the next turn; `/new`, `/cd`, `/ws use`, and `/stop` interrupt the current run
 
-#### Working directory management
+### Working directory management
 
 | Command | Effect |
 |---------|--------|
@@ -105,7 +81,7 @@ A standalone module for any project that needs to enumerate models:
 | `/ws use <name>` | Switch to a named workspace |
 | `/ws remove <name>` | Delete a named workspace |
 
-#### Session management
+### Session management
 
 | Command | Effect |
 |---------|--------|
@@ -115,16 +91,24 @@ A standalone module for any project that needs to enumerate models:
 | `/stop` | Stop the current run |
 | `/timeout [N\|off\|default]` | Set or clear the session idle watchdog |
 
-#### Status and configuration
+### Model switching
+
+| Command | Effect |
+|---------|--------|
+| `/model` | Show the current model |
+| `/model list` | Show available models grouped by family |
+| `/model <name>` | Switch to the named model; takes effect on the next message |
+| `/model reset` | Restore the default model |
+
+### Status and configuration
 
 | Command | Effect |
 |---------|--------|
 | `/status` | Show profile, agent, cwd, session, lark-cli identity, and run state |
 | `/config` | Adjust reply mode, tool-call display, COT mode, access lists, and lark-cli identity |
-| `/model` | Show / switch model (new, see above) |
 | `/help` | Help card |
 
-#### Access control
+### Access control
 
 Private by default — only the bot creator can use it. Manage access with:
 
@@ -136,7 +120,7 @@ Private by default — only the bot creator can use it. Manage access with:
 | `/invite all group` | Allow every group the bot is in |
 | `/remove user/admin/group …` | Remove access |
 
-#### System maintenance
+### System maintenance
 
 | Command | Effect |
 |---------|--------|
@@ -145,12 +129,12 @@ Private by default — only the bot creator can use it. Manage access with:
 | `/reconnect` | Force a WebSocket reconnect |
 | `/doctor [description]` | Run low-sensitivity diagnostics |
 
-#### Media and files
+### Media and files
 
 - Send images or files directly to the bot; the bridge downloads them locally before passing them to the agent
 - CloudDoc comment mentions are handled per document thread
 
-#### Multiple profiles / agents
+### Multiple profiles / agents
 
 - Each profile has its own app credentials, sessions, workspaces, lark-cli directory, and logs
 - Run Claude and Codex as separate bots using separate profiles
@@ -168,16 +152,17 @@ Private by default — only the bot creator can use it. Manage access with:
 ### Install
 
 ```bash
-git clone https://github.com/your-org/lark-channel-bridge-team.git
-cd lark-channel-bridge-team
+git clone https://github.com/Unipus-PM/lark-team-agent.git
+cd lark-team-agent
 pnpm install
 pnpm build
+npm install -g .
 ```
 
 ### First run
 
 ```bash
-node dist/bin.js run
+lark-team-agent run
 ```
 
 ### Enable multi-user mode
@@ -243,7 +228,7 @@ Place an `onboarding.md` file in the bridge config directory. Supported placehol
 
 ## Acknowledgements
 
-This project is built on top of [zhangzara/lark-channel-bridge](https://github.com/zhangzara/lark-channel-bridge) under the MIT license. Thank you zhangzara for creating such a solid foundation for bridging Feishu with local AI agents, and for welcoming community forks.
+This project is built on top of [zarazhangrui/feishu-claude-code-bridge](https://github.com/zarazhangrui/feishu-claude-code-bridge) under the MIT license. Thank you zarazhangrui for creating such a solid foundation for bridging Feishu with local AI agents, and for welcoming community forks.
 
 ---
 

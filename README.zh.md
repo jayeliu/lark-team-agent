@@ -1,10 +1,10 @@
-# lark-channel-bridge-team
+# lark-team-agent
 
-> 本项目是 [zhangzara/lark-channel-bridge](https://github.com/zhangzara/lark-channel-bridge) 的二次创作版本，基于原项目 MIT 协议进行功能扩展。感谢 zhangzara 开源这一优质项目，并鼓励社区在此基础上二创——正是这份开放精神让本项目得以诞生。
-
-把飞书 / Lark 消息和本地 Claude Code 打通的团队级 bot。支持多用户独立工作空间、自动初始化引导、模型动态切换等扩展功能，适合将 AI Agent 能力开放给整个产品/研发团队使用。
+> 本项目是 [zarazhangrui/feishu-claude-code-bridge](https://github.com/zarazhangrui/feishu-claude-code-bridge) 的二次创作版本，基于原项目 MIT 协议进行功能扩展。感谢 zarazhangrui 开源这一优质项目，并鼓励社区在此基础上二创——正是这份开放精神让本项目得以诞生。
 
 [English README](./README.md)
+
+把飞书 / Lark 消息和本地 Claude Code / Codex CLI 打通的团队级 bot。在原版基础上新增**多用户独立工作空间**和**自动初始化引导**，适合将 AI Agent 能力开放给整个产品/研发团队使用。
 
 ---
 
@@ -32,11 +32,9 @@
 
 ---
 
-## 功能全览
+## 新增功能
 
-### 新增功能
-
-#### 多用户工作空间（Multi-User Workspace）
+### 多用户工作空间（Multi-User Workspace）
 
 - **自动初始化**：用户首次私聊 bot 时，自动根据飞书姓名生成拼音目录，在 `workspaceRoot` 下创建专属工作空间
 - **目录结构**：每个用户空间包含 `projects/`（项目目录）和 `CC-Memory/`（长期记忆目录）
@@ -55,39 +53,17 @@
 }
 ```
 
-#### 首次使用引导（Onboarding）
+### 首次使用引导（Onboarding）
 
 - 用户工作空间初始化完成后，自动发送欢迎消息，介绍 bot 能力和可用指令
 - 支持通过外部 `onboarding.md` 文件自定义引导内容，支持 `{name}`、`{workspace}`、`{pinyinDir}` 占位符
 - 内置默认引导内容，包含：能力介绍、常用指令说明、CC-Memory 使用方法
 
-#### 模型动态切换（/model）
-
-| 指令 | 效果 |
-|------|------|
-| `/model` | 查看当前使用的模型 |
-| `/model list` | 查询 API 可用模型列表（按系列分组），标注当前模型 |
-| `/model <名称>` | 切换到指定模型，立即对下一次对话生效 |
-| `/model reset` | 恢复默认模型（由 `ANTHROPIC_MODEL` 环境变量决定） |
-
-- 模型设置持久化写入 `config.json`，重启后仍然生效
-- 切换后内存即时同步，无需重启 bridge
-- `/model list` 调用 `/v1/models` 接口，支持 Anthropic 官方 API 及兼容代理（如 modelproxy）
-
-#### 可用模型查询模块（anthropic/models）
-
-独立的通用模块，可被其他项目复用：
-
-- `fetchModels(opts?)` — 查询可用模型列表，永不抛出，返回类型化结果
-- `groupModels(models)` — 按系列（Claude / GPT / DeepSeek / Qwen / GLM / Kimi / MiniMax 等）分组
-- `formatFetchModelsError(error)` — 错误信息格式化（中文）
-- 内置 10s 超时、AbortController 清理、完整错误码（`missing-api-key` / `timeout` / `network-error` / `http-error` / `parse-error`）
-
 ---
 
-### 原版功能（完整保留）
+## 原版功能（完整保留）
 
-#### 消息转发
+### 消息转发
 
 - 在飞书私聊直接发消息，或在群里 `@bot`，把任务转给本机 Claude Code / Codex CLI
 - **流式卡片**：文本回复和工具调用实时更新在同一张卡片上
@@ -95,7 +71,7 @@
 - **会话延续**：每个聊天、话题、文档评论有自己的 session，不会互相串
 - **消息排队与合并**：短时间连续发送的消息合并处理；任务运行中的消息排队到下一轮
 
-#### 工作目录管理
+### 工作目录管理
 
 | 指令 | 效果 |
 |------|------|
@@ -105,7 +81,7 @@
 | `/ws use <name>` | 切换到已保存的工作目录 |
 | `/ws remove <name>` | 删除工作目录别名 |
 
-#### 会话管理
+### 会话管理
 
 | 指令 | 效果 |
 |------|------|
@@ -115,16 +91,24 @@
 | `/stop` | 停止当前正在运行的任务 |
 | `/timeout [N\|off\|default]` | 设置或清除当前 session 的空闲超时 |
 
-#### 状态与配置
+### 模型切换
+
+| 指令 | 效果 |
+|------|------|
+| `/model` | 查看当前使用的模型 |
+| `/model list` | 查询可用模型列表（按系列分组） |
+| `/model <名称>` | 切换到指定模型，立即对下一次对话生效 |
+| `/model reset` | 恢复默认模型 |
+
+### 状态与配置
 
 | 指令 | 效果 |
 |------|------|
 | `/status` | 查看 profile、agent、工作目录、session、lark-cli 身份、运行状态 |
 | `/config` | 调整展示偏好、访问控制、lark-cli 身份策略 |
-| `/model` | 查看/切换模型（新增，见上） |
 | `/help` | 帮助卡片 |
 
-#### 访问控制
+### 访问控制
 
 出厂默认只有 bot 创建者可以使用；通过以下指令管理权限：
 
@@ -136,7 +120,7 @@
 | `/invite all group` | 一键加入 bot 所在的所有群 |
 | `/remove user/admin/group ...` | 移除对应权限 |
 
-#### 系统维护
+### 系统维护
 
 | 指令 | 效果 |
 |------|------|
@@ -145,12 +129,12 @@
 | `/reconnect` | 强制 WebSocket 重连 |
 | `/doctor [描述]` | 运行诊断（低敏感度） |
 
-#### 多媒体与文件
+### 多媒体与文件
 
 - 图片和文件直接发给 bot，bridge 下载到本地后交给 agent 处理
 - 支持 CloudDoc 评论中 @bot 触发回复
 
-#### 多 Profile / 多 Agent
+### 多 Profile / 多 Agent
 
 - 每个 profile 独立维护 app 凭证、sessions、工作目录、lark-cli 目录和日志
 - 支持同时运行 Claude + Codex 两个 bot（使用不同 profile）
@@ -168,16 +152,17 @@
 ### 安装
 
 ```bash
-git clone https://github.com/your-org/lark-channel-bridge-team.git
-cd lark-channel-bridge-team
+git clone https://github.com/Unipus-PM/lark-team-agent.git
+cd lark-team-agent
 pnpm install
 pnpm build
+npm install -g .
 ```
 
 ### 首次启动
 
 ```bash
-node dist/bin.js run
+lark-team-agent run
 ```
 
 ### 启用多用户模式
@@ -243,7 +228,7 @@ mkdir -p /workspace
 
 ## 致谢
 
-本项目基于 [zhangzara/lark-channel-bridge](https://github.com/zhangzara/lark-channel-bridge) 开发，遵循 MIT 协议。感谢 zhangzara 构建了如此完善的飞书-Claude Code 桥接基础设施，并以开放的态度鼓励社区在此之上继续创作。
+本项目基于 [zarazhangrui/feishu-claude-code-bridge](https://github.com/zarazhangrui/feishu-claude-code-bridge) 开发，遵循 MIT 协议。感谢 zarazhangrui 构建了如此完善的飞书-Claude Code 桥接基础设施，并以开放的态度鼓励社区在此之上继续创作。
 
 ---
 
