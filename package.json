@@ -43,7 +43,7 @@
     "test:process": "vitest run tests/process --passWithNoTests",
     "ci:local": "git diff --check && pnpm test && pnpm typecheck && pnpm build",
     "ci:platform": "pnpm test && pnpm typecheck && pnpm build",
-    "prepare": "pnpm build",
+    "prepare": "tsup",
     "prepublishOnly": "pnpm typecheck && pnpm build"
   },
   "dependencies": {
