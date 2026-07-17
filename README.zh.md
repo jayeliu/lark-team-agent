@@ -169,7 +169,7 @@
 ### 安装
 
 ```bash
-git clone https://github.com/Unipus-PM/lark-team-agent.git
+git clone https://github.com/Fengzhaopeng/lark-team-agent.git
 cd lark-team-agent
 pnpm install
 pnpm build
