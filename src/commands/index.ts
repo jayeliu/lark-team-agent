@@ -885,7 +885,7 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
   // /model scan — probe all models and cache capabilities
   if (input === 'scan') {
     const cachePath = capabilityCachePath(ctx.controls.configPath, ctx.controls.profile);
-    await reply(ctx, '🔍 正在探测所有模型的实际能力，预计 30-60 秒…\n（对每个模型分别测试 chat / 图像 / 视频端点）');
+    await reply(ctx, '🔍 正在探测所有模型的实际能力，预计 2-5 分钟…\n（chat 探测快，图像/视频需要实际生成，单模型最长 90s）');
     const listResult = await fetchModels();
     if (!listResult.ok) {
       await reply(ctx, `❌ 获取模型列表失败：${formatFetchModelsError(listResult.error)}`);

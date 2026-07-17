@@ -93,6 +93,10 @@ async function probeModel(
 ): Promise<ModelCapability[]> {
   const capabilities: ModelCapability[] = [];
 
+  // Chat probe is fast (max_tokens=1); image/video generation takes 30s+ on some models.
+  // Use a longer timeout for media endpoints to avoid false negatives.
+  const mediaTimeoutMs = Math.max(timeoutMs, 90_000);
+
   const [chatRes, imgRes, vidRes] = await Promise.all([
     probeEndpoint(
       `${baseUrl}/v1/chat/completions`,
@@ -102,15 +106,15 @@ async function probeModel(
     ),
     probeEndpoint(
       `${baseUrl}/v1/images/generations`,
-      { model: modelId, prompt: 'test', n: 1 },
+      { model: modelId, prompt: 'test', n: 1, size: '256x256' },
       apiKey,
-      timeoutMs,
+      mediaTimeoutMs,
     ),
     probeEndpoint(
       `${baseUrl}/v1/video/generations`,
       { model: modelId, prompt: 'test', duration: 3 },
       apiKey,
-      timeoutMs,
+      mediaTimeoutMs,
     ),
   ]);
 
