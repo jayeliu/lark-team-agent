@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
 import { claudeCapability, codexCapability } from '../agent/capability';
 import { DEFAULT_MODEL, normalizeModelSelection, supportedModels } from '../agent/models';
@@ -88,7 +88,8 @@ import type { WorkspaceStore } from '../workspace/store';
 import { createBoundChat, defaultChatName } from '../bot/group';
 import { fetchKnownChats, type KnownChat } from '../bot/lark-info';
 import { applyLarkCliIdentityPolicy, hasStructuredLarkCliUserAuth } from '../lark-cli/identity-policy';
-import { fetchModels, filterChatModels, formatFetchModelsError, groupModels } from '../anthropic/models';
+import { fetchModels, filterByCapability, filterChatModels, formatFetchModelsError, groupModels } from '../anthropic/models';
+import { loadCapabilityCache, probeAllModels, saveCapabilityCache, type CapabilityCache } from '../anthropic/model-probe';
 
 export interface Controls {
   profile: string;
@@ -174,6 +175,8 @@ const handlers: Record<string, Handler> = {
   '/ws': handleWs,
   '/resume': handleResume,
   '/model': handleModel,
+  '/image': handleMediaGen,
+  '/video': handleMediaGen,
   '/status': handleStatus,
   '/help': handleHelp,
   '/account': handleAccount,
@@ -300,6 +303,11 @@ function commandReplyOptions(ctx: CommandContext): { replyTo: string; replyInThr
     replyTo: ctx.msg.messageId,
     ...(ctx.chatMode === 'topic' && ctx.msg.threadId ? { replyInThread: true as const } : {}),
   };
+}
+
+/** Path to the model capability probe cache for a given profile. */
+function capabilityCachePath(configPath: string, profile: string): string {
+  return join(dirname(configPath), 'profiles', profile, 'model-capabilities.json');
 }
 
 function isMessageAuditReject(err: unknown): boolean {
@@ -874,6 +882,38 @@ async function handleStop(args: string, ctx: CommandContext): Promise<void> {
 async function handleModel(args: string, ctx: CommandContext): Promise<void> {
   const input = args.trim();
 
+  // /model scan — probe all models and cache capabilities
+  if (input === 'scan') {
+    const cachePath = capabilityCachePath(ctx.controls.configPath, ctx.controls.profile);
+    await reply(ctx, '🔍 正在探测所有模型的实际能力，预计 30-60 秒…\n（对每个模型分别测试 chat / 图像 / 视频端点）');
+    const listResult = await fetchModels();
+    if (!listResult.ok) {
+      await reply(ctx, `❌ 获取模型列表失败：${formatFetchModelsError(listResult.error)}`);
+      return;
+    }
+    const allIds = listResult.models.map((m) => m.id);
+    let done = 0;
+    const records = await probeAllModels(allIds, {
+      onProgress: (_done, total, _id) => { done = _done; void total; },
+    });
+    await saveCapabilityCache(cachePath, records);
+    const chat = records.filter((r) => r.capabilities.includes('chat')).length;
+    const img = records.filter((r) => r.capabilities.includes('image-gen')).length;
+    const vid = records.filter((r) => r.capabilities.includes('video-gen')).length;
+    await reply(
+      ctx,
+      [
+        `✅ 探测完成（${done} 个模型）`,
+        `- 对话（chat）：${chat} 个`,
+        `- 图像生成（/image）：${img} 个`,
+        `- 视频生成（/video）：${vid} 个`,
+        '',
+        '用 `/model list` 查看对话模型，`/image` 或 `/video` 直接生成媒体。',
+      ].join('\n'),
+    );
+    return;
+  }
+
   if (input === 'list') {
     await reply(ctx, '正在查询可用模型…');
     const result = await fetchModels();
@@ -884,9 +924,14 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
     const scopeModel = ctx.sessions.getScopeModel(ctx.scope);
     const globalModel = getModel(ctx.controls.cfg);
     const current = scopeModel ?? globalModel;
-    const chatModels = filterChatModels(result.models);
+    const cachePath = capabilityCachePath(ctx.controls.configPath, ctx.controls.profile);
+    const probeCache = await loadCapabilityCache(cachePath);
+    const chatModels = filterChatModels(result.models, probeCache);
+    const cacheNote = probeCache
+      ? `（已用能力探测缓存过滤，扫描于 ${probeCache.probedAt.slice(0, 10)}）`
+      : `（未探测 — 运行 \`/model scan\` 可获得精准过滤）`;
     const groups = groupModels(chatModels);
-    const lines: string[] = [`**可用模型列表**（共 ${chatModels.length} 个，已过滤 embedding / 图像生成等不可用类型）\n`];
+    const lines: string[] = [`**可用对话模型**（共 ${chatModels.length} 个）${cacheNote}\n`];
     for (const group of groups) {
       lines.push(`**${group.label}**`);
       for (const m of group.models) {
@@ -972,6 +1017,274 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
 
   ctx.sessions.setScopeModel(ctx.scope, effectiveInput);
   await reply(ctx, `✓ 本会话模型已切换为 \`${effectiveInput}\`，下次对话立即生效。`);
+}
+
+// ── Media generation (/image, /video) ──────────────────────────────────────
+
+async function handleMediaGen(args: string, ctx: CommandContext): Promise<void> {
+  const cmdName = ctx.msg.content.trim().split(/\s+/)[0] ?? '';
+  const capability = cmdName === '/video' ? 'video-gen' : 'image-gen';
+  const input = args.trim();
+
+  const apiKey = process.env['ANTHROPIC_API_KEY'] ?? '';
+  const baseUrl = (process.env['ANTHROPIC_BASE_URL'] ?? 'https://api.anthropic.com').replace(/\/$/, '');
+
+  if (!apiKey) {
+    await reply(ctx, '❌ ANTHROPIC_API_KEY 未设置，无法调用媒体生成 API。');
+    return;
+  }
+
+  const cachePath = capabilityCachePath(ctx.controls.configPath, ctx.controls.profile);
+  const probeCache = await loadCapabilityCache(cachePath);
+
+  if (!input || input === 'help') {
+    const label = capability === 'video-gen' ? '视频生成' : '图像生成';
+    const cmd = capability === 'video-gen' ? '/video' : '/image';
+    const lines = [
+      `**${label}** \`${cmd} <描述> [--model <模型ID>] [--size <尺寸>]\``,
+      '',
+    ];
+    if (probeCache) {
+      const available = probeCache.models
+        .filter((m) => m.capabilities.includes(capability))
+        .map((m) => `- \`${m.modelId}\``);
+      if (available.length > 0) {
+        lines.push('可用模型（来自 `/model scan` 缓存）：', ...available);
+      } else {
+        lines.push('_暂无可用模型，请先执行 `/model scan` 重新探测。_');
+      }
+    } else {
+      lines.push('_尚未探测模型能力，请先执行 `/model scan`。_');
+    }
+    await reply(ctx, lines.join('\n'));
+    return;
+  }
+
+  if (!probeCache) {
+    await reply(
+      ctx,
+      `❌ 尚未探测模型能力。请先执行 \`/model scan\` 获取可用的${capability === 'video-gen' ? '视频' : '图像'}生成模型列表。`,
+    );
+    return;
+  }
+
+  const availableIds = probeCache.models
+    .filter((m) => m.capabilities.includes(capability))
+    .map((m) => m.modelId);
+
+  if (availableIds.length === 0) {
+    await reply(
+      ctx,
+      `❌ 没有可用的${capability === 'video-gen' ? '视频' : '图像'}生成模型。请重新执行 \`/model scan\`。`,
+    );
+    return;
+  }
+
+  // Parse --model flag
+  let prompt = input;
+  let modelId = availableIds[0]!;
+
+  const modelMatch = prompt.match(/\s+--model\s+(\S+)/);
+  if (modelMatch) {
+    const requested = modelMatch[1]!;
+    if (!availableIds.includes(requested)) {
+      await reply(
+        ctx,
+        `❌ 模型 \`${requested}\` 不支持${capability === 'video-gen' ? '视频' : '图像'}生成，或不在探测缓存中。` +
+          `\n可用模型：${availableIds.map((id) => `\`${id}\``).join(', ')}`,
+      );
+      return;
+    }
+    modelId = requested;
+    prompt = prompt.replace(modelMatch[0], '').trim();
+  }
+
+  // Parse --size flag
+  let size: string | undefined;
+  const sizeMatch = prompt.match(/\s+--size\s+(\S+)/);
+  if (sizeMatch) {
+    size = sizeMatch[1];
+    prompt = prompt.replace(sizeMatch[0], '').trim();
+  }
+
+  if (!prompt) {
+    await reply(ctx, '❌ 请提供描述文字。');
+    return;
+  }
+
+  if (capability === 'image-gen') {
+    await handleImageGen(prompt, modelId, size, apiKey, baseUrl, ctx);
+  } else {
+    await handleVideoGen(prompt, modelId, size, apiKey, baseUrl, ctx);
+  }
+}
+
+async function handleImageGen(
+  prompt: string,
+  modelId: string,
+  size: string | undefined,
+  apiKey: string,
+  baseUrl: string,
+  ctx: CommandContext,
+): Promise<void> {
+  await reply(ctx, `🎨 正在生成图像，模型 \`${modelId}\`…`);
+
+  const body: Record<string, unknown> = { model: modelId, prompt, n: 1 };
+  if (size) body['size'] = size;
+
+  let res: Response;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 120_000);
+    try {
+      res = await fetch(`${baseUrl}/v1/images/generations`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    await reply(ctx, `❌ 请求失败：${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  let data: unknown;
+  try { data = await res.json(); } catch {
+    await reply(ctx, `❌ API 返回非 JSON（HTTP ${res.status}）`);
+    return;
+  }
+
+  if (!res.ok) {
+    const errMsg = ((data as Record<string, unknown>)?.['error'] as Record<string, unknown> | undefined)?.['message'];
+    await reply(ctx, `❌ API 错误 ${res.status}：${errMsg ?? JSON.stringify(data).slice(0, 200)}`);
+    return;
+  }
+
+  const imageData = ((data as Record<string, unknown>)?.['data'] as Record<string, unknown>[])?.[0];
+  if (!imageData) {
+    await reply(ctx, '❌ API 返回了空结果。');
+    return;
+  }
+
+  try {
+    if (typeof imageData['b64_json'] === 'string') {
+      const imgBuffer = Buffer.from(imageData['b64_json'], 'base64');
+      await ctx.channel.send(ctx.msg.chatId, { image: { source: imgBuffer } }, commandReplyOptions(ctx));
+    } else if (typeof imageData['url'] === 'string') {
+      await ctx.channel.send(ctx.msg.chatId, { image: { source: imageData['url'] } }, commandReplyOptions(ctx));
+    } else {
+      await reply(ctx, `❌ 未识别的响应格式：${JSON.stringify(imageData).slice(0, 200)}`);
+    }
+  } catch (err) {
+    await reply(ctx, `❌ 发送图片失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function handleVideoGen(
+  prompt: string,
+  modelId: string,
+  size: string | undefined,
+  apiKey: string,
+  baseUrl: string,
+  ctx: CommandContext,
+): Promise<void> {
+  await reply(ctx, `🎬 正在提交视频生成任务，模型 \`${modelId}\`…`);
+
+  const body: Record<string, unknown> = { model: modelId, prompt, duration: 5 };
+  if (size) body['size'] = size;
+
+  let submitRes: Response;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    try {
+      submitRes = await fetch(`${baseUrl}/v1/video/generations`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    await reply(ctx, `❌ 提交失败：${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  let submitData: unknown;
+  try { submitData = await submitRes.json(); } catch {
+    await reply(ctx, `❌ API 返回非 JSON（HTTP ${submitRes.status}）`);
+    return;
+  }
+
+  if (!submitRes.ok) {
+    const errMsg = ((submitData as Record<string, unknown>)?.['error'] as Record<string, unknown> | undefined)?.['message'];
+    await reply(ctx, `❌ API 错误 ${submitRes.status}：${errMsg ?? JSON.stringify(submitData).slice(0, 200)}`);
+    return;
+  }
+
+  const taskId = (submitData as Record<string, unknown>)?.['task_id'] as string | undefined
+    ?? (submitData as Record<string, unknown>)?.['id'] as string | undefined;
+
+  if (!taskId) {
+    await reply(ctx, `❌ 未获取到任务 ID，原始响应：${JSON.stringify(submitData).slice(0, 200)}`);
+    return;
+  }
+
+  await reply(ctx, `⏳ 任务已提交（ID: \`${taskId}\`），正在等待生成完成…`);
+
+  // Poll until complete (max 3 minutes, every 5s)
+  const pollDeadline = Date.now() + 3 * 60 * 1000;
+  let videoUrl: string | undefined;
+
+  while (Date.now() < pollDeadline) {
+    await new Promise((r) => setTimeout(r, 5_000));
+
+    let pollRes: Response;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15_000);
+      try {
+        pollRes = await fetch(`${baseUrl}/v1/video/generations/${taskId}`, {
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      continue;
+    }
+
+    let pollData: unknown;
+    try { pollData = await pollRes.json(); } catch { continue; }
+
+    const d = pollData as Record<string, unknown>;
+    const status = String(d['status'] ?? '').toUpperCase();
+
+    if (status === 'SUCCESS' || status === 'SUCCEEDED' || status === 'COMPLETED') {
+      videoUrl = d['video_url'] as string | undefined
+        ?? (d['data'] as Record<string, unknown> | undefined)?.['video_url'] as string | undefined
+        ?? ((d['data'] as Record<string, unknown> | undefined)?.['content'] as Record<string, unknown> | undefined)?.['video_url'] as string | undefined;
+      break;
+    }
+    if (status === 'FAILED' || status === 'ERROR') {
+      const reason = (d['error'] as Record<string, unknown> | undefined)?.['message'] ?? d['message'] ?? '未知原因';
+      await reply(ctx, `❌ 视频生成失败：${reason}`);
+      return;
+    }
+  }
+
+  if (!videoUrl) {
+    await reply(ctx, '❌ 视频生成超时（3 分钟），请稍后重试。');
+    return;
+  }
+
+  await reply(ctx, `✅ 视频已生成：${videoUrl}`);
 }
 
 async function handleTimeout(args: string, ctx: CommandContext): Promise<void> {

@@ -129,17 +129,49 @@ export function formatFetchModelsError(error: FetchModelsError): string {
 
 // ── Model grouping ──────────────────────────────────────────────────────────
 
-/** Patterns for model IDs that cannot be used as Claude Code `--model` arguments. */
-const UNSUPPORTED_PATTERNS = [
+import type { CapabilityCache, ModelCapability } from './model-probe.js';
+
+/**
+ * Fallback patterns for filtering out non-chat models when no probe cache
+ * is available. These cover the most common embedding / image / video model
+ * naming conventions but are NOT exhaustive — use probe cache when possible.
+ */
+const NON_CHAT_FALLBACK_PATTERNS = [
   /embedding/i,
-  /^(gpt-image|dall-e)/i,
-  /^doubao-seed(ance|ream|video)/i,
-  /^(hy\d|seedance|seedream|seedvideo)/i,
 ];
 
-/** Filter out model IDs that are known to be incompatible with Claude Code CLI. */
-export function filterChatModels(models: ModelInfo[]): ModelInfo[] {
-  return models.filter((m) => !UNSUPPORTED_PATTERNS.some((p) => p.test(m.id)));
+/**
+ * Filter models to those usable as Claude Code `--model` argument.
+ * If a probe cache is supplied, uses it as the authoritative source.
+ * Otherwise falls back to the conservative name-based filter above.
+ */
+export function filterChatModels(models: ModelInfo[], probeCache?: CapabilityCache | null): ModelInfo[] {
+  if (probeCache) {
+    const chatIds = new Set(
+      probeCache.models
+        .filter((m) => m.capabilities.includes('chat'))
+        .map((m) => m.modelId),
+    );
+    return models.filter((m) => chatIds.has(m.id));
+  }
+  return models.filter((m) => !NON_CHAT_FALLBACK_PATTERNS.some((p) => p.test(m.id)));
+}
+
+/**
+ * Filter models to those with a specific capability, using probe cache.
+ * Returns all models when no cache is available (caller must handle).
+ */
+export function filterByCapability(
+  models: ModelInfo[],
+  capability: ModelCapability,
+  probeCache: CapabilityCache,
+): ModelInfo[] {
+  const ids = new Set(
+    probeCache.models
+      .filter((m) => m.capabilities.includes(capability))
+      .map((m) => m.modelId),
+  );
+  return models.filter((m) => ids.has(m.id));
 }
 
 const MODEL_GROUP_RULES: Array<{ label: string; pattern: RegExp }> = [
