@@ -44,6 +44,30 @@ Enable in your profile config:
 }
 ```
 
+### Per-user Feishu identity (OAuth token isolation)
+
+When `lark-cli` identity is set to `user-default`, each user authorizes with their **own** Feishu account independently. The bot can then act as that user when reading docs, writing comments, or calling Feishu APIs — without sharing credentials across users.
+
+- **On-demand OAuth flow**: if a user hasn't authorized yet, the bot sends a private device-flow link; once authorized, their token is stored in an isolated `lark-cli` config directory under `user-tokens/<senderId>/`
+- **Pending detection**: if authorization is already in progress, the bot reminds the user to complete the browser flow rather than starting a duplicate
+- **Token isolation**: each user's `LARKSUITE_CLI_CONFIG_DIR` is injected per-request, so no token ever leaks across users
+- **Automatic identity policy**: after authorization, `lark-cli` is configured with `strict-mode off` and `default-as auto` so it seamlessly picks the right identity for each operation
+
+### Dynamic model switching (`/model`)
+
+Switch models on the fly without restarting the bridge — per session or globally.
+
+| Command | Effect |
+|---------|--------|
+| `/model` | Show the current model (session override and global default) |
+| `/model list` | Query available models from the API, grouped by family, with the current model marked |
+| `/model <name>` | Switch model for the current session only |
+| `/model reset` | Clear the session override and restore the global default |
+| `/model --global <name>` | Change the global default for all sessions without a per-session override |
+
+- Session-level and global-level settings are independent — a per-session switch doesn't affect other users or other chats
+- Model preference is persisted and survives bridge restarts
+
 ### First-contact onboarding
 
 New team members are greeted automatically — no manual setup or documentation-hunting required.
