@@ -135,7 +135,9 @@ Private by default — only the bot creator can use it. Manage access with:
 | `/invite admin @name` | Add an admin |
 | `/invite group` | Allow the current group |
 | `/invite all group` | Allow every group the bot is in |
-| `/remove user/admin/group …` | Remove access |
+| `/remove user @name` | Remove a user |
+| `/remove admin @name` | Remove an admin |
+| `/remove group` | Remove the current group |
 
 ### System maintenance
 
@@ -235,11 +237,82 @@ Place an `onboarding.md` file in the bridge config directory. Supported placehol
 
 ## Permission modes
 
+The recommended profile config field is `permissions.defaultAccess` and `permissions.maxAccess`. New profiles default to `full` for both values. To tighten a profile, set either to `workspace` or `read-only`.
+
+```json
+{
+  "permissions": {
+    "defaultAccess": "full",
+    "maxAccess": "full"
+  }
+}
+```
+
 | Bridge access | Claude permission mode |
 |---------------|----------------------|
 | `full` | `bypassPermissions` |
 | `workspace` | `acceptEdits` |
 | `read-only` | `plan` |
+
+The legacy `sandbox` field is still readable for old configs. After the bridge saves the profile, it migrates that setting to canonical `permissions`.
+
+---
+
+## Service commands (background daemon)
+
+Install globally before using service commands. Service commands install a per-profile service:
+
+```bash
+lark-team-agent start [--profile <name>]
+lark-team-agent stop [--profile <name>]
+lark-team-agent restart [--profile <name>]
+lark-team-agent status [--profile <name>]
+lark-team-agent unregister [--profile <name>]
+```
+
+Platform mapping:
+- **macOS**: launchd user agent
+- **Linux**: systemd user unit
+- **Windows**: Task Scheduler task, launched through a `.cmd` wrapper
+
+### Profile management
+
+```bash
+lark-team-agent profile create <name> --agent claude
+lark-team-agent profile list
+lark-team-agent profile use <name>
+lark-team-agent profile remove <name>
+lark-team-agent profile remove <name> --purge --yes
+lark-team-agent profile export <name> [--output ./profile.json] [--force]
+lark-team-agent profile export <name> --include-secrets --yes
+```
+
+---
+
+## lark-cli identity policy
+
+Each profile uses a profile-local lark-cli directory at `~/.lark-channel/profiles/<profile>/lark-cli`. The agent process receives `LARKSUITE_CLI_CONFIG_DIR` pointing to that directory, so personal authorization in one profile is not shared with another.
+
+The default policy is `bot-only`. Switch to `user-default` in `/config` to allow an authorized user identity alongside the app identity. `/status` shows the current summary as `lark-cli: app` or `lark-cli: user-ready`.
+
+Each profile may define a default working directory through `workspaces.default`. New profiles can be created with `--workspace <path>`; if omitted, the bridge creates a profile-managed default working directory.
+
+---
+
+## Cloud-doc comments
+
+Cloud-doc comments are document-scoped: anyone who can comment in a supported document and mention the bot can trigger a reply. No separate workspace binding or document allowlist is required.
+
+---
+
+## Development
+
+```bash
+pnpm install
+pnpm test
+pnpm typecheck
+pnpm build
+```
 
 ---
 

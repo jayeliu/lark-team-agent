@@ -235,11 +235,82 @@ mkdir -p /workspace
 
 ## 权限模式
 
+Profile 配置推荐使用 `permissions.defaultAccess` 和 `permissions.maxAccess` 字段，新建 Profile 默认均为 `full`。如需收紧，可将任意一项设为 `workspace` 或 `read-only`。
+
+```json
+{
+  "permissions": {
+    "defaultAccess": "full",
+    "maxAccess": "full"
+  }
+}
+```
+
 | Bridge 访问模式 | Claude 权限模式 |
 |----------------|----------------|
 | `full` | `bypassPermissions` |
 | `workspace` | `acceptEdits` |
 | `read-only` | `plan` |
+
+旧版 `sandbox` 字段仍可读取。bridge 保存 profile 后，会把该设置迁移为 canonical `permissions`。
+
+---
+
+## 服务命令（后台 daemon）
+
+使用服务命令前需先全局安装。服务命令为每个 profile 安装独立服务（per-profile service）：
+
+```bash
+lark-team-agent start [--profile <name>]
+lark-team-agent stop [--profile <name>]
+lark-team-agent restart [--profile <name>]
+lark-team-agent status [--profile <name>]
+lark-team-agent unregister [--profile <name>]
+```
+
+平台映射：
+- **macOS**：launchd user agent
+- **Linux**：systemd user unit
+- **Windows**：Task Scheduler 任务，launcher 是 `.cmd`
+
+### Profile 管理
+
+```bash
+lark-team-agent profile create <name> --agent claude
+lark-team-agent profile list
+lark-team-agent profile use <name>
+lark-team-agent profile remove <name>
+lark-team-agent profile remove <name> --purge --yes
+lark-team-agent profile export <name> [--output ./profile.json] [--force]
+lark-team-agent profile export <name> --include-secrets --yes
+```
+
+---
+
+## lark-cli 身份策略
+
+每个 profile 都使用当前 profile 的 lark-cli 目录：`~/.lark-channel/profiles/<profile>/lark-cli`。agent 子进程会收到指向这个目录的 `LARKSUITE_CLI_CONFIG_DIR`，所以一个 profile 里的个人授权不会共享给另一个 profile。
+
+默认策略是 `bot-only`。可在 `/config` 里切换为 `user-default`，允许授权的用户身份与应用身份并用。`/status` 会显示当前状态为 `lark-cli: app` 或 `lark-cli: user-ready`。
+
+每个 profile 可以有一个默认工作目录：`workspaces.default`。新建 profile 时可以传 `--workspace <path>` 作为初始目录。
+
+---
+
+## 云文档评论
+
+云文档评论按文档权限生效：能在支持的文档里评论并 @bot 的人均可触发回复，无需单独绑定工作目录或建立文档白名单。
+
+---
+
+## 开发
+
+```bash
+pnpm install
+pnpm test
+pnpm typecheck
+pnpm build
+```
 
 ---
 
