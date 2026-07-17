@@ -926,20 +926,50 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
     const current = scopeModel ?? globalModel;
     const cachePath = capabilityCachePath(ctx.controls.configPath, ctx.controls.profile);
     const probeCache = await loadCapabilityCache(cachePath);
-    const chatModels = filterChatModels(result.models, probeCache);
+
     const cacheNote = probeCache
-      ? `（已用能力探测缓存过滤，扫描于 ${probeCache.probedAt.slice(0, 10)}）`
-      : `（未探测 — 运行 \`/model scan\` 可获得精准过滤）`;
-    const groups = groupModels(chatModels);
-    const lines: string[] = [`**可用对话模型**（共 ${chatModels.length} 个）${cacheNote}\n`];
-    for (const group of groups) {
-      lines.push(`**${group.label}**`);
+      ? `扫描于 ${probeCache.probedAt.slice(0, 10)}`
+      : '未探测 — 运行 `/model scan` 可获精准分类';
+
+    const lines: string[] = [`**模型列表**（${cacheNote}）\n`];
+
+    // ── 对话模型 ─────────────────────────────────────────
+    const chatModels = filterChatModels(result.models, probeCache);
+    const chatGroups = groupModels(chatModels);
+    lines.push(`**💬 对话模型**（${chatModels.length} 个，可用于 \`/model\` 切换）`);
+    for (const group of chatGroups) {
+      lines.push(`\n_${group.label}_`);
       for (const m of group.models) {
         lines.push(m.id === current ? `- \`${m.id}\` ← 当前` : `- \`${m.id}\``);
       }
-      lines.push('');
     }
-    lines.push('用 `/model <模型名>` 切换（当前会话），`/model --global <模型名>` 改全局默认。');
+    lines.push('');
+
+    if (probeCache) {
+      // ── 生图模型 ───────────────────────────────────────
+      const imgModels = filterByCapability(result.models, 'image-gen', probeCache);
+      if (imgModels.length > 0) {
+        lines.push(`**🎨 生图模型**（${imgModels.length} 个，用 \`/image\` 调用）`);
+        for (const m of groupModels(imgModels)) {
+          lines.push(`\n_${m.label}_`);
+          m.models.forEach((x) => lines.push(`- \`${x.id}\``));
+        }
+        lines.push('');
+      }
+
+      // ── 生视频模型 ────────────────────────────────────
+      const vidModels = filterByCapability(result.models, 'video-gen', probeCache);
+      if (vidModels.length > 0) {
+        lines.push(`**🎬 生视频模型**（${vidModels.length} 个，用 \`/video\` 调用）`);
+        for (const m of groupModels(vidModels)) {
+          lines.push(`\n_${m.label}_`);
+          m.models.forEach((x) => lines.push(`- \`${x.id}\``));
+        }
+        lines.push('');
+      }
+    }
+
+    lines.push('用 `/model <模型名>` 切换对话模型，`/model --global <模型名>` 改全局默认。');
     await reply(ctx, lines.join('\n'));
     return;
   }
