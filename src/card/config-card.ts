@@ -3,6 +3,12 @@ import type { KnownChat } from '../bot/lark-info';
 import type { AgentKind, LarkCliIdentityPreset, ProfileMode } from '../config/profile-schema';
 import type { CotMessagesMode, MessageReplyMode } from '../config/schema';
 
+/** A model option for the image/video default model pickers. */
+export interface MediaModelOption {
+  value: string;
+  label: string;
+}
+
 export interface ConfigFormOpts {
   /** Profile's agent kind — decides which model catalog the picker shows. */
   agentKind: AgentKind;
@@ -22,6 +28,14 @@ export interface ConfigFormOpts {
   allowedChats: string[];
   admins: string[];
   knownChats: KnownChat[];
+  /** Available image-gen models from the capability cache. Empty = cache not built. */
+  imageModels: MediaModelOption[];
+  /** Currently selected default image model. 'auto' = first available. */
+  imageDefaultModel: string;
+  /** Available video-gen models from the capability cache. Empty = cache not built. */
+  videoModels: MediaModelOption[];
+  /** Currently selected default video model. 'auto' = first available. */
+  videoDefaultModel: string;
 }
 
 function collapsedAccessPanel(title: string, elements: object[]): object {
@@ -274,6 +288,53 @@ export function configFormCard(opts: ConfigFormOpts): object {
               ],
             },
             { tag: 'hr' },
+            {
+              tag: 'markdown',
+              content:
+                '**🎨 /image 默认模型**\n' +
+                (opts.imageModels.length > 0
+                  ? '_「无默认，自动选第一个可用」= 不固定，每次用能力缓存里的第一个图像模型_'
+                  : '_尚未探测模型能力，请先执行 `/model scan`，再重新打开此设置页_'),
+            },
+            {
+              tag: 'select_static',
+              name: 'image_default_model',
+              initial_option: opts.imageDefaultModel,
+              options: [
+                {
+                  text: { tag: 'plain_text', content: '无默认，自动选第一个可用' },
+                  value: 'auto',
+                },
+                ...opts.imageModels.map((m) => ({
+                  text: { tag: 'plain_text', content: m.label },
+                  value: m.value,
+                })),
+              ],
+            },
+            {
+              tag: 'markdown',
+              content:
+                '\n**🎬 /video 默认模型**\n' +
+                (opts.videoModels.length > 0
+                  ? '_「无默认，自动选第一个可用」= 不固定，每次用能力缓存里的第一个视频模型_'
+                  : '_尚未探测模型能力，请先执行 `/model scan`，再重新打开此设置页_'),
+            },
+            {
+              tag: 'select_static',
+              name: 'video_default_model',
+              initial_option: opts.videoDefaultModel,
+              options: [
+                {
+                  text: { tag: 'plain_text', content: '无默认，自动选第一个可用' },
+                  value: 'auto',
+                },
+                ...opts.videoModels.map((m) => ({
+                  text: { tag: 'plain_text', content: m.label },
+                  value: m.value,
+                })),
+              ],
+            },
+            { tag: 'hr' },
             collapsedAccessPanel('🔒 **访问控制**（点击展开）', accessElements),
             {
               tag: 'column_set',
@@ -342,7 +403,9 @@ export function configSavedCard(opts: ConfigFormOpts): object {
             `**并发上限**:\`${opts.maxConcurrentRuns}\`\n` +
             `**run 探活**:\`${opts.runIdleTimeoutMinutes > 0 ? `${opts.runIdleTimeoutMinutes} 分钟` : '关闭'}\`\n` +
             `**群里需要 @ bot**:\`${opts.requireMentionInGroup ? '是' : '否'}\`\n\n` +
-            `**lark-cli 身份策略**:\`${opts.mode === 'team' ? '只允许应用身份(团队版强制)' : opts.larkCliIdentity === 'user-default' ? '允许用户身份' : '只允许应用身份'}\`\n\n` +
+            `**lark-cli 身份策略**:\`${opts.mode === 'team' ? '只允许应用身份(团队版强制)' : opts.larkCliIdentity === 'user-default' ? '允许用户身份' : '只允许应用身份'}\`\n` +
+            `**🎨 /image 默认模型**:\`${opts.imageDefaultModel === 'auto' ? '自动选第一个可用' : opts.imageDefaultModel}\`\n` +
+            `**🎬 /video 默认模型**:\`${opts.videoDefaultModel === 'auto' ? '自动选第一个可用' : opts.videoDefaultModel}\`\n\n` +
             '🔒 **访问控制**' +
             (opts.mode === 'team' ? '（_团队版下不生效,任何人可用_）' : '') +
             '\n' +

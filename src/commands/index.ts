@@ -29,12 +29,14 @@ import type { AppConfig, AppPreferences, MessageReplyMode, TenantBrand } from '.
 import {
   getAgentStopGraceMs,
   getCotMessages,
+  getImageDefaultModel,
   getMaxConcurrentRuns,
   getMessageReplyMode,
   getModel,
   getRequireMentionInGroup,
   getRunIdleTimeoutMs,
   getShowToolCalls,
+  getVideoDefaultModel,
   secretKeyForApp,
 } from '../config/schema';
 import type {
@@ -900,13 +902,15 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
     const chat = records.filter((r) => r.capabilities.includes('chat')).length;
     const img = records.filter((r) => r.capabilities.includes('image-gen')).length;
     const vid = records.filter((r) => r.capabilities.includes('video-gen')).length;
+    const none = records.filter((r) => r.capabilities.length === 0).length;
     await reply(
       ctx,
       [
-        `✅ 探测完成（${done} 个模型）`,
-        `- 对话（chat）：${chat} 个`,
-        `- 图像生成（/image）：${img} 个`,
-        `- 视频生成（/video）：${vid} 个`,
+        `✅ 探测完成（共 ${records.length} 个模型，各项能力可重叠）`,
+        `- 💬 对话（chat）：${chat} 个`,
+        `- 🎨 图像生成（/image）：${img} 个`,
+        `- 🎬 视频生成（/video）：${vid} 个`,
+        ...(none > 0 ? [`- ❓ 三项均不支持：${none} 个`] : []),
         '',
         '用 `/model list` 查看对话模型，`/image` 或 `/video` 直接生成媒体。',
       ].join('\n'),
@@ -1110,10 +1114,22 @@ async function handleMediaGen(args: string, ctx: CommandContext): Promise<void> 
     return;
   }
 
-  // Parse --model flag
+  // Parse --model flag. Two supported forms:
+  //   --model <id>    explicit flag name (canonical)
+  //   --<id>          shorthand when the id contains dashes (e.g. --doubao-xxx-2-0)
   let prompt = input;
-  let modelId = availableIds[0]!;
+  const configDefaultModel =
+    capability === 'image-gen'
+      ? getImageDefaultModel(ctx.controls.cfg)
+      : getVideoDefaultModel(ctx.controls.cfg);
+  // Use config-set default if valid, otherwise fall back to first available
+  const effectiveDefault =
+    configDefaultModel && availableIds.includes(configDefaultModel)
+      ? configDefaultModel
+      : availableIds[0]!;
+  let modelId = effectiveDefault;
 
+  // Try --model <id> first
   const modelMatch = prompt.match(/\s+--model\s+(\S+)/);
   if (modelMatch) {
     const requested = modelMatch[1]!;
@@ -1127,6 +1143,18 @@ async function handleMediaGen(args: string, ctx: CommandContext): Promise<void> 
     }
     modelId = requested;
     prompt = prompt.replace(modelMatch[0], '').trim();
+  } else {
+    // Try --<modelId> shorthand: match any --word that contains a dash
+    // and exactly matches one of the available model IDs
+    const shortMatch = prompt.match(/\s+--([\w][\w.-]+)/);
+    if (shortMatch) {
+      const candidate = shortMatch[1]!;
+      if (availableIds.includes(candidate)) {
+        modelId = candidate;
+        prompt = prompt.replace(shortMatch[0], '').trim();
+      }
+      // If not in available list, leave as unrecognised flag — will be part of prompt
+    }
   }
 
   // Parse --size flag
@@ -1221,9 +1249,18 @@ async function handleVideoGen(
   baseUrl: string,
   ctx: CommandContext,
 ): Promise<void> {
-  await reply(ctx, `🎬 正在提交视频生成任务，模型 \`${modelId}\`…`);
+  // Parse optional duration from prompt: "...5秒" or "...5s" or "...5 seconds"
+  let duration = 10;
+  const durationMatch = prompt.match(/(\d+)\s*(?:秒|s(?:ec(?:ond)?s?)?)\b/i);
+  if (durationMatch) {
+    const d = parseInt(durationMatch[1]!, 10);
+    if (d >= 1 && d <= 30) duration = d;
+    prompt = prompt.replace(durationMatch[0], '').trim();
+  }
 
-  const body: Record<string, unknown> = { model: modelId, prompt, duration: 5 };
+  await reply(ctx, `🎬 正在提交视频生成任务，模型 \`${modelId}\`，时长 ${duration} 秒…`);
+
+  const body: Record<string, unknown> = { model: modelId, prompt, duration };
   if (size) body['size'] = size;
 
   let submitRes: Response;
@@ -1267,12 +1304,12 @@ async function handleVideoGen(
 
   await reply(ctx, `⏳ 任务已提交（ID: \`${taskId}\`），正在等待生成完成…`);
 
-  // Poll until complete (max 3 minutes, every 5s)
-  const pollDeadline = Date.now() + 3 * 60 * 1000;
+  // Poll until complete (max 8 minutes, every 8s — video generation typically takes 3-5 min)
+  const pollDeadline = Date.now() + 8 * 60 * 1000;
   let videoUrl: string | undefined;
 
   while (Date.now() < pollDeadline) {
-    await new Promise((r) => setTimeout(r, 5_000));
+    await new Promise((r) => setTimeout(r, 8_000));
 
     let pollRes: Response;
     try {
@@ -1294,27 +1331,107 @@ async function handleVideoGen(
     try { pollData = await pollRes.json(); } catch { continue; }
 
     const d = pollData as Record<string, unknown>;
-    const status = String(d['status'] ?? '').toUpperCase();
+    // Support both flat response and nested { code: "success", data: {...} } envelope
+    const inner = (d['code'] === 'success' || d['code'] !== undefined)
+      ? (d['data'] as Record<string, unknown> | undefined ?? d)
+      : d;
+
+    const status = String(
+      inner['status'] ??
+      (inner['data'] as Record<string, unknown> | undefined)?.['status'] ??
+      '',
+    ).toUpperCase();
 
     if (status === 'SUCCESS' || status === 'SUCCEEDED' || status === 'COMPLETED') {
-      videoUrl = d['video_url'] as string | undefined
-        ?? (d['data'] as Record<string, unknown> | undefined)?.['video_url'] as string | undefined
-        ?? ((d['data'] as Record<string, unknown> | undefined)?.['content'] as Record<string, unknown> | undefined)?.['video_url'] as string | undefined;
+      // Probe multiple known URL paths from the API response
+      videoUrl =
+        (inner['result_url'] as string | undefined) ??
+        (inner['video_url'] as string | undefined) ??
+        ((inner['data'] as Record<string, unknown> | undefined)?.['content'] as Record<string, unknown> | undefined)?.['video_url'] as string | undefined ??
+        ((inner['data'] as Record<string, unknown> | undefined)?.['video_url'] as string | undefined);
       break;
     }
-    if (status === 'FAILED' || status === 'ERROR') {
-      const reason = (d['error'] as Record<string, unknown> | undefined)?.['message'] ?? d['message'] ?? '未知原因';
+    if (status === 'FAILED' || status === 'ERROR' || status === 'FAILURE') {
+      const reason =
+        (inner['fail_reason'] as string | undefined) ??
+        (inner['error'] as Record<string, unknown> | undefined)?.['message'] ??
+        inner['message'] ??
+        '未知原因';
       await reply(ctx, `❌ 视频生成失败：${reason}`);
       return;
     }
   }
 
   if (!videoUrl) {
-    await reply(ctx, '❌ 视频生成超时（3 分钟），请稍后重试。');
+    await reply(ctx, '❌ 视频生成超时（8 分钟），请稍后重试。');
     return;
   }
 
-  await reply(ctx, `✅ 视频已生成：${videoUrl}`);
+  // Download the video and send it as a real video message via lark-cli.
+  // Lark requires a cover image alongside the video, so we generate a
+  // minimal 1x1 JPEG cover before uploading.
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFile);
+  const { mkdtempSync: mktmp, writeFileSync: wfs, rmSync: rms } = await import('node:fs');
+  const { tmpdir: td } = await import('node:os');
+
+  const tmpDir = mktmp(`${td()}/lark-video-`);
+  const videoPath = `${tmpDir}/video.mp4`;
+  const coverPath = `${tmpDir}/cover.jpg`;
+
+  try {
+    // Download video
+    const videoResp = await fetch(videoUrl, { signal: AbortSignal.timeout(120_000) });
+    if (!videoResp.ok) throw new Error(`download failed: ${videoResp.status}`);
+    const videoBuffer = Buffer.from(await videoResp.arrayBuffer());
+    wfs(videoPath, videoBuffer);
+
+    // Generate minimal JPEG cover (1x1 gray pixel, FFD8...FFD9 baseline JPEG)
+    const minimalJpeg = Buffer.from(
+      'FFD8FFE000104A46494600010100000100010000FFDB004300080606070605080707070909080A0C' +
+      '140D0C0B0B0C1912130F141D1A1F1E1D1A1C1C20242E2720222C231C1C2837292C30313434341F' +
+      '27393D38323C2E333432FFDB0043010909090C0B0C180D0D1832211C213232323232323232323232' +
+      '32323232323232323232323232323232323232323232323232323232323232323232323232FFC00011' +
+      '080001000103012200021101031101FFC4001F0000010501010101010100000000000000000102030405' +
+      '060708090A0BFFC400B5100002010303020403050504040000017D01020300041105122131410613516' +
+      '1072232718114912A081B1A1C109233352F0156272D10A162434E125F11718191A262728292A353637' +
+      '38393A434445464748494A535455565758595A636465666768696A737475767778797A838485868788' +
+      '898A929394959697989990A0A2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2' +
+      'D3D4D5D6D7D8D9DAE1E2E3E4E5E6E7E8E9EAF1F2F3F4F5F6F7F8F9FAFFC4001F0100030101010101' +
+      '01010101000000000000010203040506070809000BFFC400B511000201020404030407050404000102' +
+      '7700010203110405213106124151076171132232810814422191A1B1C109233352F0156272D10A162' +
+      '434E125F11718191A262728292A353637383A434445464748494A535455565758595A63646566676869' +
+      '6A737475767778797A82838485868788898A929394959697989990A0A2A3A4A5A6A7A8A9AAB2B3B4' +
+      'B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE2E3E4E5E6E7E8E9EAF2F3F4F5F6F7' +
+      'F8F9FAFFDA000C03010002110311003F009FE52B28A2803FFFD9',
+      'hex',
+    );
+    wfs(coverPath, minimalJpeg);
+
+    // Send via lark-cli
+    const result = await execFileAsync(
+      'lark-cli',
+      [
+        'im', '+messages-send', '--as', 'bot',
+        '--chat-id', ctx.msg.chatId,
+        '--video', `./video.mp4`,
+        '--video-cover', `./cover.jpg`,
+        '--json',
+      ],
+      { cwd: tmpDir, env: { ...process.env, LARK_CHANNEL: '' }, timeout: 60_000 },
+    );
+    const sent = JSON.parse(result.stdout) as { ok?: boolean; error?: { message?: string } };
+    if (!sent.ok) {
+      throw new Error(sent.error?.message ?? 'lark-cli send failed');
+    }
+  } catch (err) {
+    // Fallback: reply with URL if upload fails
+    await reply(ctx, `✅ 视频已生成，直接链接（发送失败时备用）：${videoUrl}\n\n原因：${err instanceof Error ? err.message : String(err)}`);
+    return;
+  } finally {
+    try { rms(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 }
 
 async function handleTimeout(args: string, ctx: CommandContext): Promise<void> {
@@ -2220,6 +2337,37 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
 
   const ms = getRunIdleTimeoutMs(ctx.controls.cfg);
   const access = ctx.controls.profileConfig.access;
+
+  // Load capability cache for image/video model pickers
+  const cachePath = capabilityCachePath(ctx.controls.configPath, ctx.controls.profile);
+  const probeCache = await loadCapabilityCache(cachePath);
+
+  const AUTO_OPTION = 'auto';
+
+  const imageModels = probeCache
+    ? probeCache.models
+        .filter((m) => m.capabilities.includes('image-gen'))
+        .map((m) => ({ value: m.modelId, label: m.modelId }))
+    : [];
+
+  const videoModels = probeCache
+    ? probeCache.models
+        .filter((m) => m.capabilities.includes('video-gen'))
+        .map((m) => ({ value: m.modelId, label: m.modelId }))
+    : [];
+
+  const savedImageModel = getImageDefaultModel(ctx.controls.cfg);
+  const imageDefaultModel =
+    savedImageModel && imageModels.some((m) => m.value === savedImageModel)
+      ? savedImageModel
+      : AUTO_OPTION;
+
+  const savedVideoModel = getVideoDefaultModel(ctx.controls.cfg);
+  const videoDefaultModel =
+    savedVideoModel && videoModels.some((m) => m.value === savedVideoModel)
+      ? savedVideoModel
+      : AUTO_OPTION;
+
   const card = configFormCard({
     agentKind: ctx.controls.profileConfig.agentKind,
     mode: ctx.controls.profileConfig.mode,
@@ -2238,6 +2386,10 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
     allowedChats: access.allowedChats,
     admins: access.admins,
     knownChats: ctx.controls.knownChats ?? [],
+    imageModels,
+    imageDefaultModel,
+    videoModels,
+    videoDefaultModel,
   });
   if (ctx.fromCardAction) await recallMessage(ctx, ctx.msg.messageId);
   await sendManagedCard(ctx.channel, ctx.msg.chatId, card, commandReplyOptions(ctx));
@@ -2351,6 +2503,12 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
   const previousEffectiveIdentity = effectiveLarkCliIdentity(ctx.controls.profileConfig);
   const larkCliIdentityChanged = nextEffectiveIdentity !== previousEffectiveIdentity;
 
+  // Parse image/video default model. 'auto' / empty / unexpected → undefined (auto-select).
+  const rawImageModel = String(fv.image_default_model ?? '').trim();
+  const imageDefaultModel = rawImageModel && rawImageModel !== 'auto' ? rawImageModel : undefined;
+  const rawVideoModel = String(fv.video_default_model ?? '').trim();
+  const videoDefaultModel = rawVideoModel && rawVideoModel !== 'auto' ? rawVideoModel : undefined;
+
   const formMsgId = ctx.msg.messageId;
   const access = ctx.controls.profileConfig.access;
 
@@ -2380,6 +2538,8 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       maxConcurrentRuns,
       runIdleTimeoutMinutes,
       requireMentionInGroup,
+      imageDefaultModel,
+      videoDefaultModel,
     };
 
     let failureStep = 'config.save';
@@ -2450,6 +2610,10 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
         allowedChats: access.allowedChats,
         admins: access.admins,
         knownChats: ctx.controls.knownChats ?? [],
+        imageModels: [],
+        imageDefaultModel: imageDefaultModel ?? 'auto',
+        videoModels: [],
+        videoDefaultModel: videoDefaultModel ?? 'auto',
       }),
     );
 

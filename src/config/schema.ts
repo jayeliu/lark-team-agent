@@ -152,6 +152,18 @@ export interface AppPreferences {
    * Range 100-30000; out-of-range values fall back to default.
    */
   agentStopGraceMs?: number;
+  /**
+   * Default model to use for `/image` generation commands. When set, this
+   * model is used instead of the first available image-capable model in the
+   * capability cache. `undefined` means auto-select the first available.
+   */
+  imageDefaultModel?: string;
+  /**
+   * Default model to use for `/video` generation commands. When set, this
+   * model is used instead of the first available video-capable model in the
+   * capability cache. `undefined` means auto-select the first available.
+   */
+  videoDefaultModel?: string;
 }
 
 /**
@@ -279,4 +291,16 @@ export function getRunIdleTimeoutMs(cfg: AppConfig): number | undefined {
 export function getModel(cfg: AppConfig): string | undefined {
   const raw = cfg.preferences?.model;
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+}
+
+/** Returns the preferred default model for /image, or undefined to auto-select. */
+export function getImageDefaultModel(cfg: AppConfig): string | undefined {
+  const raw = cfg.preferences?.imageDefaultModel;
+  return typeof raw === 'string' && raw.trim() && raw !== 'auto' ? raw.trim() : undefined;
+}
+
+/** Returns the preferred default model for /video, or undefined to auto-select. */
+export function getVideoDefaultModel(cfg: AppConfig): string | undefined {
+  const raw = cfg.preferences?.videoDefaultModel;
+  return typeof raw === 'string' && raw.trim() && raw !== 'auto' ? raw.trim() : undefined;
 }

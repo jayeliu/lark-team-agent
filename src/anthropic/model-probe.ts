@@ -74,8 +74,14 @@ function isChatCapable(status: number, body: unknown): boolean {
   return text.includes('max_tokens') || text.includes('output limit') || text.includes('finish') || text.includes('maximum');
 }
 
-function isImageCapable(status: number): boolean {
-  return status === 200;
+function isImageCapable(status: number, body: unknown): boolean {
+  if (status === 200) return true;
+  if (status !== 400) return false;
+  // 400 with a size/param error means the model supports image generation
+  // but doesn't accept the small probe size — still image-capable.
+  const msg = (body as Record<string, unknown>)?.['error'] as Record<string, unknown> | undefined;
+  const text = String(msg?.['message'] ?? '').toLowerCase();
+  return text.includes('size') || text.includes('invalid_value') || text.includes('supported size');
 }
 
 function isVideoCapable(status: number, body: unknown): boolean {
@@ -85,48 +91,22 @@ function isVideoCapable(status: number, body: unknown): boolean {
   return !!(d?.['task_id'] || d?.['id']);
 }
 
-async function probeModel(
-  modelId: string,
-  baseUrl: string,
-  apiKey: string,
-  timeoutMs: number,
-): Promise<ModelCapability[]> {
-  const capabilities: ModelCapability[] = [];
-
-  // Chat probe is fast (max_tokens=1); image/video generation takes 30s+ on some models.
-  // Use a longer timeout for media endpoints to avoid false negatives.
-  const mediaTimeoutMs = Math.max(timeoutMs, 90_000);
-
-  const [chatRes, imgRes, vidRes] = await Promise.all([
-    probeEndpoint(
-      `${baseUrl}/v1/chat/completions`,
-      { model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 },
-      apiKey,
-      timeoutMs,
-    ),
-    probeEndpoint(
-      `${baseUrl}/v1/images/generations`,
-      { model: modelId, prompt: 'test', n: 1, size: '256x256' },
-      apiKey,
-      mediaTimeoutMs,
-    ),
-    probeEndpoint(
-      `${baseUrl}/v1/video/generations`,
-      { model: modelId, prompt: 'test', duration: 3 },
-      apiKey,
-      mediaTimeoutMs,
-    ),
-  ]);
-
-  if (isChatCapable(chatRes.status, chatRes.body)) capabilities.push('chat');
-  if (isImageCapable(imgRes.status)) capabilities.push('image-gen');
-  if (isVideoCapable(vidRes.status, vidRes.body)) capabilities.push('video-gen');
-
-  return capabilities;
-}
-
 // ── Public API ───────────────────────────────────────────────────────────────
 
+/**
+ * Probe all models for their capabilities.
+ *
+ * Strategy: run three separate parallel rounds (chat → image → video) instead
+ * of probing all three endpoints per model simultaneously. This way the fast
+ * chat round finishes first without being held back by slow media generation,
+ * and each round's concurrency limit is independent.
+ *
+ *   Round 1 – chat:      all 121 models, ~15s timeout, completes in seconds
+ *   Round 2 – image-gen: all 121 models, ~90s timeout, ~8 batches of 16
+ *   Round 3 – video-gen: all 121 models, ~90s timeout, ~8 batches of 16
+ *
+ * Wall-clock ≈ chat_time + image_time + video_time  (vs. max(chat,img,vid) × batches before)
+ */
 export async function probeAllModels(
   modelIds: string[],
   opts: ProbeOptions = {},
@@ -134,30 +114,64 @@ export async function probeAllModels(
   const baseUrl = (opts.baseUrl ?? process.env['ANTHROPIC_BASE_URL'] ?? 'https://api.anthropic.com').replace(/\/$/, '');
   const apiKey = opts.apiKey ?? process.env['ANTHROPIC_API_KEY'] ?? '';
   const concurrency = opts.concurrency ?? 16;
-  const timeoutMs = opts.timeoutMs ?? 15_000;
+  const chatTimeoutMs = opts.timeoutMs ?? 15_000;
+  const mediaTimeoutMs = Math.max(chatTimeoutMs, 90_000);
 
-  const results: ModelCapabilityRecord[] = [];
+  // Accumulate capabilities per modelId across all three rounds
+  const capMap = new Map<string, Set<ModelCapability>>();
+  for (const id of modelIds) capMap.set(id, new Set());
+
   let done = 0;
 
-  // Process in batches to respect concurrency limit
-  for (let i = 0; i < modelIds.length; i += concurrency) {
-    const batch = modelIds.slice(i, i + concurrency);
-    const batchResults = await Promise.all(
-      batch.map(async (modelId) => {
-        const capabilities = await probeModel(modelId, baseUrl, apiKey, timeoutMs);
-        done++;
-        opts.onProgress?.(done, modelIds.length, modelId);
-        return {
-          modelId,
-          capabilities,
-          probedAt: new Date().toISOString(),
-        };
-      }),
-    );
-    results.push(...batchResults);
+  async function runRound(
+    endpoint: string,
+    makeBody: (modelId: string) => object,
+    judge: (status: number, body: unknown) => boolean,
+    capability: ModelCapability,
+    timeoutMs: number,
+  ): Promise<void> {
+    for (let i = 0; i < modelIds.length; i += concurrency) {
+      const batch = modelIds.slice(i, i + concurrency);
+      await Promise.all(
+        batch.map(async (modelId) => {
+          const res = await probeEndpoint(`${baseUrl}${endpoint}`, makeBody(modelId), apiKey, timeoutMs);
+          if (judge(res.status, res.body)) capMap.get(modelId)!.add(capability);
+          done++;
+          opts.onProgress?.(done, modelIds.length * 3, modelId);
+        }),
+      );
+    }
   }
 
-  return results;
+  await runRound(
+    '/v1/chat/completions',
+    (id) => ({ model: id, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+    isChatCapable,
+    'chat',
+    chatTimeoutMs,
+  );
+
+  await runRound(
+    '/v1/images/generations',
+    (id) => ({ model: id, prompt: 'test', n: 1, size: '256x256' }),
+    (status, body) => isImageCapable(status, body),
+    'image-gen',
+    mediaTimeoutMs,
+  );
+
+  await runRound(
+    '/v1/video/generations',
+    (id) => ({ model: id, prompt: 'test', duration: 3 }),
+    isVideoCapable,
+    'video-gen',
+    mediaTimeoutMs,
+  );
+
+  return modelIds.map((modelId) => ({
+    modelId,
+    capabilities: [...capMap.get(modelId)!],
+    probedAt: new Date().toISOString(),
+  }));
 }
 
 // ── Cache I/O ────────────────────────────────────────────────────────────────

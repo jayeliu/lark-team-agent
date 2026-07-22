@@ -17,6 +17,9 @@ import {
   type AgentRunOptions,
 } from '../types';
 import { translateEvent } from './stream-json';
+import { isQuotaError, keyPool } from '../../anthropic/key-pool';
+
+const QUOTA_EXHAUSTED_PREFIX = 'quota-exhausted:';
 
 export interface ClaudeAdapterOptions {
   binary?: string;
@@ -60,6 +63,62 @@ export class ClaudeAdapter implements AgentAdapter {
       throw new Error('cwd is required for ClaudeAdapter.run');
     }
 
+    const stopGraceMs = opts.stopGraceMs ?? 5000;
+
+    // Mutable reference to the current child — replaced on quota-triggered retry.
+    let currentChild: ClaudeChild = this.spawnChild(opts);
+
+    const events = this.createRetryEventStream(opts, currentChild, stopGraceMs, (newChild) => {
+      currentChild = newChild;
+    });
+
+    return {
+      runId: opts.runId,
+      events,
+      async stop() {
+        const child = currentChild;
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        log.info('agent', 'stop-sigterm', { pid: child.pid ?? null, graceMs: stopGraceMs });
+        child.kill('SIGTERM');
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) {
+              log.warn('agent', 'stop-sigkill', {
+                pid: child.pid ?? null,
+                graceMs: stopGraceMs,
+                reason: 'grace-period-expired',
+              });
+              child.kill('SIGKILL');
+            }
+            resolve();
+          }, stopGraceMs);
+          child.once('exit', () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+      },
+      waitForExit(timeoutMs: number): Promise<boolean> {
+        const child = currentChild;
+        if (child.exitCode !== null || child.signalCode !== null) {
+          return Promise.resolve(true);
+        }
+        return new Promise<boolean>((resolve) => {
+          const onExit = (): void => {
+            clearTimeout(timer);
+            resolve(true);
+          };
+          const timer = setTimeout(() => {
+            child.removeListener('exit', onExit);
+            resolve(false);
+          }, timeoutMs);
+          child.once('exit', onExit);
+        });
+      },
+    };
+  }
+
+  private spawnChild(opts: AgentRunOptions): ClaudeChild {
     // The prompt and bridge system prompt must NOT go through argv. On Windows,
     // `claude` resolves to a `claude.cmd` shim and cross-spawn routes it through
     // `cmd.exe /d /s /c`, which interprets `<` and `>` as redirection operators
@@ -103,6 +162,7 @@ export class ClaudeAdapter implements AgentAdapter {
       hasSession: Boolean(opts.sessionId),
       promptChars: opts.prompt.length,
       model: opts.model,
+      apiKey: (process.env['ANTHROPIC_API_KEY'] ?? '').slice(-6) || '(none)',
     });
 
     // Listeners MUST be attached synchronously here, before we return.
@@ -124,6 +184,11 @@ export class ClaudeAdapter implements AgentAdapter {
           runtimeError = new Error(`failed to spawn claude: ${line.trim()}`);
           child.stdout.destroy();
           child.kill();
+        } else if (isQuotaError(line)) {
+          const exhaustedKey = process.env['ANTHROPIC_API_KEY'] ?? '';
+          runtimeError = new Error(`${QUOTA_EXHAUSTED_PREFIX}${exhaustedKey.slice(-6)}`);
+          child.stdout.destroy();
+          child.kill();
         }
         nl = stderrBuffer.indexOf('\n');
       }
@@ -142,55 +207,72 @@ export class ClaudeAdapter implements AgentAdapter {
     });
     child.stdin.end(opts.prompt, 'utf8');
 
-    // Default 5s if caller didn't specify — claude often has live
-    // subprocesses (lark-cli waiting for OAuth, long Bash, etc.) and the
-    // old 500ms was nowhere near enough for them to flush state before the
-    // SIGKILL cascade. Callers (channel.ts, /doctor) override per-run with
-    // a value derived from preferences.
-    const stopGraceMs = opts.stopGraceMs ?? 5000;
+    // Attach stderrChunks/runtimeError accessors to the child object for
+    // the event stream to read later.
+    (child as ClaudeChild & { _stderrChunks: Buffer[]; _getRuntimeError: () => Error | null })
+      ._stderrChunks = stderrChunks;
+    (child as ClaudeChild & { _stderrChunks: Buffer[]; _getRuntimeError: () => Error | null })
+      ._getRuntimeError = () => runtimeError;
 
-    return {
-      runId: opts.runId,
-      events: createEventStream(child, stderrChunks, () => runtimeError),
-      async stop() {
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        log.info('agent', 'stop-sigterm', { pid: child.pid ?? null, graceMs: stopGraceMs });
-        child.kill('SIGTERM');
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(() => {
-            if (child.exitCode === null && child.signalCode === null) {
-              log.warn('agent', 'stop-sigkill', {
-                pid: child.pid ?? null,
-                graceMs: stopGraceMs,
-                reason: 'grace-period-expired',
-              });
-              child.kill('SIGKILL');
-            }
-            resolve();
-          }, stopGraceMs);
-          child.once('exit', () => {
-            clearTimeout(timer);
-            resolve();
-          });
-        });
-      },
-      waitForExit(timeoutMs: number): Promise<boolean> {
-        if (child.exitCode !== null || child.signalCode !== null) {
-          return Promise.resolve(true);
+    return child;
+  }
+
+  private async *createRetryEventStream(
+    opts: AgentRunOptions,
+    initialChild: ClaudeChild,
+    _stopGraceMs: number,
+    onNewChild: (c: ClaudeChild) => void,
+  ): AsyncGenerator<AgentEvent> {
+    let child = initialChild;
+    // Maximum 1 retry (one key rotation) per run to avoid infinite loops.
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      const typed = child as ClaudeChild & {
+        _stderrChunks: Buffer[];
+        _getRuntimeError: () => Error | null;
+      };
+      let hitQuota = false;
+      for await (const evt of createEventStream(
+        child,
+        typed._stderrChunks ?? [],
+        typed._getRuntimeError ?? (() => null),
+      )) {
+        // Detect quota-exhausted error events; don't forward them downstream.
+        if (
+          evt.type === 'error' &&
+          typeof evt.message === 'string' &&
+          evt.message.startsWith(QUOTA_EXHAUSTED_PREFIX)
+        ) {
+          hitQuota = true;
+          const exhaustedKey = process.env['ANTHROPIC_API_KEY'] ?? '';
+          const rotated = keyPool.rotate(exhaustedKey);
+          if (rotated) {
+            log.info('agent', 'key-pool-rotated', {
+              attempt,
+              newKey: (process.env['ANTHROPIC_API_KEY'] ?? '').slice(-6),
+            });
+            // Yield a user-visible text note about the key switch.
+            yield {
+              type: 'text',
+              delta: '\n\n_⚠️ API 密钥已达今日限额，已自动切换备用密钥，正在重试…_\n\n',
+            } as AgentEvent;
+            break;
+          } else {
+            // Pool exhausted — forward as a normal error.
+            yield {
+              type: 'error',
+              message: '所有 API 密钥均已达今日限额，请明天再试或补充备用密钥。',
+              terminationReason: 'failed',
+            } as AgentEvent;
+            return;
+          }
         }
-        return new Promise<boolean>((resolve) => {
-          const onExit = (): void => {
-            clearTimeout(timer);
-            resolve(true);
-          };
-          const timer = setTimeout(() => {
-            child.removeListener('exit', onExit);
-            resolve(false);
-          }, timeoutMs);
-          child.once('exit', onExit);
-        });
-      },
-    };
+        yield evt;
+      }
+      if (!hitQuota) return;
+      // Spawn a new child with the rotated key and continue.
+      child = this.spawnChild(opts);
+      onNewChild(child);
+    }
   }
 }
 

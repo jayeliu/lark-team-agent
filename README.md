@@ -1,39 +1,39 @@
 # lark-team-agent
 
-> This project is a fork of [zarazhangrui/feishu-claude-code-bridge](https://github.com/zarazhangrui/feishu-claude-code-bridge), extended under the MIT license. Big thanks to zarazhangrui for building this excellent bridge and for openly encouraging community forks — this project wouldn't exist without that spirit.
+> 本项目是 [zarazhangrui/feishu-claude-code-bridge](https://github.com/zarazhangrui/feishu-claude-code-bridge) 的二次创作版本，基于原项目 MIT 协议进行功能扩展。感谢 zarazhangrui 开源这一优质项目，并鼓励社区在此基础上二创——正是这份开放精神让本项目得以诞生。
 
-[中文 README](./README.zh.md)
+[English README](./README.en.md)
 
-A team-grade bot that bridges Feishu / Lark messenger with local Claude Code or Codex CLI. It extends the original bridge with **multi-user workspace isolation** and **first-contact onboarding**, so the whole team can share one deployed bot while each member keeps their own isolated session, working directory, and memory.
-
----
-
-## Who this is for
-
-| Scenario | Details |
-|----------|---------|
-| **Shared team AI Agent** | Product, engineering, and design members all talk to the same Feishu bot, each with fully isolated sessions and working directories |
-| **Server-side deployment** | Deploy once on a cloud server; team members need no local setup |
-| **Multiple projects** | Each user has a personal workspace and can freely switch between projects with `/cd` and `/ws` |
-| **Solo developers** | Multi-user mode is opt-in; when disabled, behaviour is identical to the original bridge |
+把飞书 / Lark 消息和本地 Claude Code / Codex CLI 打通的团队级 bot。扩展了**多用户独立工作空间**和**自动初始化引导**，让整个产品/研发团队可以共用同一个 bot，各自保持独立的会话、工作目录和记忆。
 
 ---
 
-## Team use-case extensions
+## 适用场景
 
-Built on top of the original bridge, this project extends it for **team scenarios** where multiple people share one deployed bot. The key additions:
+| 场景 | 说明 |
+|------|------|
+| **团队共用 AI Agent** | 产品、研发、设计等多个角色通过同一个飞书 bot 使用 Claude Code，各自的会话、工作目录、记忆完全隔离 |
+| **企业/团队部署** | 部署在云服务器，成员无需本地安装任何环境，开箱即用 |
+| **多项目并行** | 每个用户拥有独立工作空间，可通过 `/cd`、`/ws` 在不同项目间自由切换 |
+| **个人开发者** | 兼容原版单用户模式，不启用多用户时与原版完全一致 |
 
-### Multi-user workspace isolation
+---
 
-Each team member gets a fully isolated environment — their own session, working directory, and long-term memory. No one's work interferes with anyone else's.
+## 团队场景扩展功能
 
-- **Auto-init on first contact**: when a user DMs the bot for the first time, the bridge reads their Feishu display name, converts it to a pinyin directory name, and creates a personal workspace under `workspaceRoot`
-- **Directory layout**: each user workspace contains `projects/` and `CC-Memory/`
-- **Pre-seeded config files**: `CLAUDE.md` (workspace conventions) and `user.md` (user identity) are written on initialization
-- **Stable session scope**: p2p scope is keyed by `senderId` instead of `chatId`, surviving app reinstalls and device switches
-- **Concurrency-safe**: concurrent first messages from the same user share a single registration promise; registration failures send a visible error and halt further processing
+在原版 lark-channel-bridge 的基础上，本项目重点扩展了**多人共用同一个 bot** 的团队场景，核心新特性：
 
-Enable in your profile config:
+### 多用户工作空间（Multi-User Workspace）
+
+每位团队成员拥有完全隔离的独立环境——独立的 session、工作目录和长期记忆，互不干扰。
+
+- **自动初始化**：用户首次私聊 bot 时，自动根据飞书姓名生成拼音目录，在 `workspaceRoot` 下创建专属工作空间
+- **目录结构**：每个用户空间包含 `projects/`（项目目录）和 `CC-Memory/`（长期记忆目录）
+- **预置配置文件**：自动写入 `CLAUDE.md`（工作空间使用约定）和 `user.md`（用户身份信息）
+- **会话隔离**：p2p 私聊的 session scope 改为 `senderId`（不再是 `chatId`），跨设备、跨重装保持稳定
+- **并发安全**：同一用户短时间内发多条消息不会触发重复注册，注册失败会给出明确提示
+
+启用方式（在 `config.json` 对应 profile 中）：
 
 ```json
 {
@@ -44,131 +44,129 @@ Enable in your profile config:
 }
 ```
 
-### Per-user Feishu identity (OAuth token isolation)
+### 每用户独立飞书身份（OAuth token 隔离）
 
-When `lark-cli` identity is set to `user-default`, each user authorizes with their **own** Feishu account independently. The bot can then act as that user when reading docs, writing comments, or calling Feishu APIs — without sharing credentials across users.
+当 `lark-cli` 身份策略设为 `user-default` 时，每位用户以**自己的**飞书账号独立完成授权。bot 在读取云文档、写入评论、调用飞书 API 时，会以该用户的真实身份操作，各用户凭证互不共享。
 
-- **On-demand OAuth flow**: if a user hasn't authorized yet, the bot sends a private device-flow link; once authorized, their token is stored in an isolated `lark-cli` config directory under `user-tokens/<senderId>/`
-- **Pending detection**: if authorization is already in progress, the bot reminds the user to complete the browser flow rather than starting a duplicate
-- **Token isolation**: each user's `LARKSUITE_CLI_CONFIG_DIR` is injected per-request, so no token ever leaks across users
-- **Automatic identity policy**: after authorization, `lark-cli` is configured with `strict-mode off` and `default-as auto` so it seamlessly picks the right identity for each operation
+- **按需 OAuth 授权**：用户首次触发需要飞书身份的操作时，bot 私信发送设备流授权链接；授权完成后 token 存储在独立的 `lark-cli` 配置目录 `user-tokens/<senderId>/` 下
+- **等待状态检测**：若授权流程已在进行中，bot 提醒用户完成浏览器授权，不会重复发起
+- **token 隔离**：每次请求按用户注入独立的 `LARKSUITE_CLI_CONFIG_DIR`，token 不会跨用户泄漏
+- **自动身份策略**：授权完成后自动执行 `strict-mode off` 和 `default-as auto`，让 lark-cli 无感知地为每次操作选择正确身份
 
-### Dynamic model switching (`/model`)
+### 模型动态切换（/model）
 
-Switch models on the fly without restarting the bridge — per session or globally.
+随时切换模型，无需重启 bridge，支持会话级和全局两种粒度。
 
-| Command | Effect |
-|---------|--------|
-| `/model` | Show the current model (session override and global default) |
-| `/model list` | Query available models from the API, grouped by family, with the current model marked |
-| `/model <name>` | Switch model for the current session only |
-| `/model reset` | Clear the session override and restore the global default |
-| `/model --global <name>` | Change the global default for all sessions without a per-session override |
+| 指令 | 效果 |
+|------|------|
+| `/model` | 查看当前模型（会话覆盖值 + 全局默认） |
+| `/model list` | 查询 API 可用模型列表（按系列分组，标注当前模型） |
+| `/model <名称>` | 仅切换当前会话的模型 |
+| `/model reset` | 清除会话覆盖，恢复全局默认 |
+| `/model --global <名称>` | 修改全局默认，影响所有无会话覆盖的对话 |
 
-- Session-level and global-level settings are independent — a per-session switch doesn't affect other users or other chats
-- Model preference is persisted and survives bridge restarts
+- 会话级和全局级设置相互独立，单个会话切换不影响其他用户和其他群
+- 模型设置持久化，重启 bridge 后仍然生效
 
-### First-contact onboarding
+### 首次使用引导（Onboarding）
 
-New team members are greeted automatically — no manual setup or documentation-hunting required.
+新成员首次私聊时自动发送欢迎消息，无需人工引导，开箱即用。
 
-- After workspace initialization, the bot sends a welcome message introducing its capabilities and available commands
-- Supports an external `onboarding.md` file for custom content, with `{name}`, `{workspace}`, and `{pinyinDir}` placeholders
-- Built-in default content covers: capability overview, command reference, and CC-Memory usage guide
-
----
-
-## Original features (fully preserved)
-
-### Message forwarding
-
-- Send a DM directly, or `@bot` in a group, to forward tasks to local Claude Code or Codex CLI
-- **Streaming card**: text replies and tool calls update in real time on a single Lark card
-- **COT process messages**: optionally send a progress message with agent step text and tool summaries, then deliver the final answer separately
-- **Session continuity**: each chat, topic, or document comment thread keeps its own session
-- **Queuing and batching**: messages sent in quick succession are handled together; messages during a run queue for the next turn; `/new`, `/cd`, `/ws use`, and `/stop` interrupt the current run
-
-### Working directory management
-
-| Command | Effect |
-|---------|--------|
-| `/cd <path>` | Switch working directory and reset the current session |
-| `/ws list` | List named workspaces |
-| `/ws save <name>` | Save the current directory under a name |
-| `/ws use <name>` | Switch to a named workspace |
-| `/ws remove <name>` | Delete a named workspace |
-
-### Session management
-
-| Command | Effect |
-|---------|--------|
-| `/new` / `/reset` | Clear the current session |
-| `/new chat [name]` | Create a Feishu group chat bound to a new session, inheriting the current working directory |
-| `/resume` | Browse and restore compatible history sessions |
-| `/stop` | Stop the current run |
-| `/timeout [N\|off\|default]` | Set or clear the session idle watchdog |
-
-### Model switching
-
-| Command | Effect |
-|---------|--------|
-| `/model` | Show the current model |
-| `/model list` | Show available models grouped by family |
-| `/model <name>` | Switch to the named model; takes effect on the next message |
-| `/model reset` | Restore the default model |
-
-### Status and configuration
-
-| Command | Effect |
-|---------|--------|
-| `/status` | Show profile, agent, cwd, session, lark-cli identity, and run state |
-| `/config` | Adjust reply mode, tool-call display, COT mode, access lists, and lark-cli identity |
-| `/help` | Help card |
-
-### Access control
-
-Private by default — only the bot creator can use it. Manage access with:
-
-| Command | Effect |
-|---------|--------|
-| `/invite user @name` | Allow a user to DM the bot |
-| `/invite admin @name` | Add an admin |
-| `/invite group` | Allow the current group |
-| `/invite all group` | Allow every group the bot is in |
-| `/remove user @name` | Remove a user |
-| `/remove admin @name` | Remove an admin |
-| `/remove group` | Remove the current group |
-
-### System maintenance
-
-| Command | Effect |
-|---------|--------|
-| `/ps` | List local bridge processes |
-| `/exit <id\|#>` | Stop a bridge process |
-| `/reconnect` | Force a WebSocket reconnect |
-| `/doctor [description]` | Run low-sensitivity diagnostics |
-
-### Media and files
-
-- Send images or files directly to the bot; the bridge downloads them locally before passing them to the agent
-- CloudDoc comment mentions are handled per document thread
-
-### Multiple profiles / agents
-
-- Each profile has its own app credentials, sessions, workspaces, lark-cli directory, and logs
-- Run Claude and Codex as separate bots using separate profiles
+- 用户工作空间初始化完成后，自动发送欢迎消息，介绍 bot 能力和可用指令
+- 支持通过外部 `onboarding.md` 文件自定义引导内容，支持 `{name}`、`{workspace}`、`{pinyinDir}` 占位符
+- 内置默认引导内容，包含：能力介绍、常用指令说明、CC-Memory 使用方法
 
 ---
 
-## Quick deployment (server)
+## 原版功能（完整保留）
 
-### Prerequisites
+### 消息转发
+
+- 在飞书私聊直接发消息，或在群里 `@bot`，把任务转给本机 Claude Code / Codex CLI
+- **流式卡片**：文本回复和工具调用实时更新在同一张卡片上
+- **COT 过程消息**：可选先发一条过程消息展示 agent 的阶段性进度，再单独发送最终答案
+- **会话延续**：每个聊天、话题、文档评论有自己的 session，不会互相串
+- **消息排队与合并**：短时间连续发送的消息合并处理；任务运行中的消息排队到下一轮
+
+### 工作目录管理
+
+| 指令 | 效果 |
+|------|------|
+| `/cd <path>` | 切换工作目录，重置当前 session |
+| `/ws list` | 查看所有已保存的工作目录 |
+| `/ws save <name>` | 将当前目录保存为别名 |
+| `/ws use <name>` | 切换到已保存的工作目录 |
+| `/ws remove <name>` | 删除工作目录别名 |
+
+### 会话管理
+
+| 指令 | 效果 |
+|------|------|
+| `/new` / `/reset` | 清除当前 session，开始新对话 |
+| `/new chat [名称]` | 新建飞书群并关联 session，自动继承当前工作目录 |
+| `/resume` | 查看并恢复历史 session |
+| `/stop` | 停止当前正在运行的任务 |
+| `/timeout [N\|off\|default]` | 设置或清除当前 session 的空闲超时 |
+
+### 模型切换
+
+| 指令 | 效果 |
+|------|------|
+| `/model` | 查看当前使用的模型 |
+| `/model list` | 查询可用模型列表（按系列分组） |
+| `/model <名称>` | 切换到指定模型，立即对下一次对话生效 |
+| `/model reset` | 恢复默认模型 |
+
+### 状态与配置
+
+| 指令 | 效果 |
+|------|------|
+| `/status` | 查看 profile、agent、工作目录、session、lark-cli 身份、运行状态 |
+| `/config` | 调整展示偏好、访问控制、lark-cli 身份策略 |
+| `/help` | 帮助卡片 |
+
+### 访问控制
+
+出厂默认只有 bot 创建者可以使用；通过以下指令管理权限：
+
+| 指令 | 效果 |
+|------|------|
+| `/invite user @某人` | 允许该用户私聊 bot |
+| `/invite admin @某人` | 添加为管理员 |
+| `/invite group` | 将当前群加入响应名单 |
+| `/invite all group` | 一键加入 bot 所在的所有群 |
+| `/remove user/admin/group ...` | 移除对应权限 |
+
+### 系统维护
+
+| 指令 | 效果 |
+|------|------|
+| `/ps` | 列出本地所有 bridge 进程 |
+| `/exit <id\|#>` | 停止某个 bridge 进程 |
+| `/reconnect` | 强制 WebSocket 重连 |
+| `/doctor [描述]` | 运行诊断（低敏感度） |
+
+### 多媒体与文件
+
+- 图片和文件直接发给 bot，bridge 下载到本地后交给 agent 处理
+- 支持 CloudDoc 评论中 @bot 触发回复
+
+### 多 Profile / 多 Agent
+
+- 每个 profile 独立维护 app 凭证、sessions、工作目录、lark-cli 目录和日志
+- 支持同时运行 Claude + Codex 两个 bot（使用不同 profile）
+
+---
+
+## 快速部署（服务器端）
+
+### 前置条件
 
 - Node.js >= 20.12.0
-- Claude Code installed and logged in: `claude` — see https://docs.anthropic.com/en/docs/claude-code/quickstart
-- A Feishu / Lark PersonalAgent app (the first-run wizard can create one)
+- Claude Code 已安装并登录：`claude`，详见 https://docs.anthropic.com/en/docs/claude-code/quickstart
+- 一个飞书 PersonalAgent 应用（首次启动向导可帮助创建）
 
-### Install
+### 安装
 
 ```bash
 git clone https://github.com/Fengzhaopeng/lark-team-agent.git
@@ -178,15 +176,15 @@ pnpm build
 npm install -g .
 ```
 
-### First run
+### 首次启动
 
 ```bash
 lark-team-agent run
 ```
 
-### Enable multi-user mode
+### 启用多用户模式
 
-Edit `~/.lark-channel/config.json` and add to the active profile:
+编辑 `~/.lark-channel/config.json`，在对应 profile 中添加：
 
 ```json
 {
@@ -197,47 +195,47 @@ Edit `~/.lark-channel/config.json` and add to the active profile:
 }
 ```
 
-Ensure the root directory exists and is writable by the bridge process:
+确保 `workspaceRoot` 目录已存在且 bridge 进程有写权限：
 
 ```bash
 mkdir -p /workspace
 ```
 
-Restart the bridge. The next user to DM the bot will be automatically onboarded.
+重启 bridge 后，新用户首次私聊即自动完成工作空间初始化。
 
-### Custom onboarding content
+### 自定义引导内容
 
-Place an `onboarding.md` file in the bridge config directory. Supported placeholders:
+在 bridge 配置目录下创建 `onboarding.md`，支持以下占位符：
 
 ```
-{name}        User's Feishu display name
-{workspace}   Absolute path to the user's workspace
-{pinyinDir}   Workspace directory name (pinyin of the user's name)
+{name}        用户飞书姓名
+{workspace}   用户工作空间绝对路径
+{pinyinDir}   工作空间目录名（拼音）
 ```
 
 ---
 
-## Data directories
+## 数据目录
 
-| Path | Content |
-|------|---------|
-| `~/.lark-channel/config.json` | Root config (profiles + active profile) |
-| `~/.lark-channel/profiles/<profile>/sessions.json` | Session state |
-| `~/.lark-channel/profiles/<profile>/workspaces.json` | Workspace bindings |
-| `~/.lark-channel/profiles/<profile>/users.json` | Multi-user registry (multi-user mode) |
-| `~/.lark-channel/profiles/<profile>/lark-cli/` | Profile-local lark-cli directory |
-| `~/.lark-channel/profiles/<profile>/logs/` | Structured run logs |
-| `/workspace/<pinyinDir>/` | User personal workspace (multi-user mode) |
-| `/workspace/<pinyinDir>/CLAUDE.md` | Workspace conventions |
-| `/workspace/<pinyinDir>/user.md` | User identity info |
-| `/workspace/<pinyinDir>/CC-Memory/` | User long-term memory directory |
-| `/workspace/<pinyinDir>/projects/` | User project directory |
+| 路径 | 内容 |
+|------|------|
+| `~/.lark-channel/config.json` | 根配置（profiles + 活跃 profile） |
+| `~/.lark-channel/profiles/<profile>/sessions.json` | Session 状态 |
+| `~/.lark-channel/profiles/<profile>/workspaces.json` | 工作目录绑定 |
+| `~/.lark-channel/profiles/<profile>/users.json` | 多用户注册表（多用户模式） |
+| `~/.lark-channel/profiles/<profile>/lark-cli/` | Profile 独立的 lark-cli 目录 |
+| `~/.lark-channel/profiles/<profile>/logs/` | 结构化运行日志 |
+| `/workspace/<pinyinDir>/` | 用户独立工作空间（多用户模式） |
+| `/workspace/<pinyinDir>/CLAUDE.md` | 工作空间使用约定 |
+| `/workspace/<pinyinDir>/user.md` | 用户身份信息 |
+| `/workspace/<pinyinDir>/CC-Memory/` | 用户长期记忆目录 |
+| `/workspace/<pinyinDir>/projects/` | 用户项目目录 |
 
 ---
 
-## Permission modes
+## 权限模式
 
-The recommended profile config field is `permissions.defaultAccess` and `permissions.maxAccess`. New profiles default to `full` for both values. To tighten a profile, set either to `workspace` or `read-only`.
+Profile 配置推荐使用 `permissions.defaultAccess` 和 `permissions.maxAccess` 字段，新建 Profile 默认均为 `full`。如需收紧，可将任意一项设为 `workspace` 或 `read-only`。
 
 ```json
 {
@@ -248,19 +246,19 @@ The recommended profile config field is `permissions.defaultAccess` and `permiss
 }
 ```
 
-| Bridge access | Claude permission mode |
-|---------------|----------------------|
+| Bridge 访问模式 | Claude 权限模式 |
+|----------------|----------------|
 | `full` | `bypassPermissions` |
 | `workspace` | `acceptEdits` |
 | `read-only` | `plan` |
 
-The legacy `sandbox` field is still readable for old configs. After the bridge saves the profile, it migrates that setting to canonical `permissions`.
+旧版 `sandbox` 字段仍可读取。bridge 保存 profile 后，会把该设置迁移为 canonical `permissions`。
 
 ---
 
-## Service commands (background daemon)
+## 服务命令（后台 daemon）
 
-Install globally before using service commands. Service commands install a per-profile service:
+使用服务命令前需先全局安装。服务命令为每个 profile 安装独立服务（per-profile service）：
 
 ```bash
 lark-team-agent start [--profile <name>]
@@ -270,12 +268,12 @@ lark-team-agent status [--profile <name>]
 lark-team-agent unregister [--profile <name>]
 ```
 
-Platform mapping:
-- **macOS**: launchd user agent
-- **Linux**: systemd user unit
-- **Windows**: Task Scheduler task, launched through a `.cmd` wrapper
+平台映射：
+- **macOS**：launchd user agent
+- **Linux**：systemd user unit
+- **Windows**：Task Scheduler 任务，launcher 是 `.cmd`
 
-### Profile management
+### Profile 管理
 
 ```bash
 lark-team-agent profile create <name> --agent claude
@@ -289,23 +287,23 @@ lark-team-agent profile export <name> --include-secrets --yes
 
 ---
 
-## lark-cli identity policy
+## lark-cli 身份策略
 
-Each profile uses a profile-local lark-cli directory at `~/.lark-channel/profiles/<profile>/lark-cli`. The agent process receives `LARKSUITE_CLI_CONFIG_DIR` pointing to that directory, so personal authorization in one profile is not shared with another.
+每个 profile 都使用当前 profile 的 lark-cli 目录：`~/.lark-channel/profiles/<profile>/lark-cli`。agent 子进程会收到指向这个目录的 `LARKSUITE_CLI_CONFIG_DIR`，所以一个 profile 里的个人授权不会共享给另一个 profile。
 
-The default policy is `bot-only`. Switch to `user-default` in `/config` to allow an authorized user identity alongside the app identity. `/status` shows the current summary as `lark-cli: app` or `lark-cli: user-ready`.
+默认策略是 `bot-only`。可在 `/config` 里切换为 `user-default`，允许授权的用户身份与应用身份并用。`/status` 会显示当前状态为 `lark-cli: app` 或 `lark-cli: user-ready`。
 
-Each profile may define a default working directory through `workspaces.default`. New profiles can be created with `--workspace <path>`; if omitted, the bridge creates a profile-managed default working directory.
-
----
-
-## Cloud-doc comments
-
-Cloud-doc comments are document-scoped: anyone who can comment in a supported document and mention the bot can trigger a reply. No separate workspace binding or document allowlist is required.
+每个 profile 可以有一个默认工作目录：`workspaces.default`。新建 profile 时可以传 `--workspace <path>` 作为初始目录。
 
 ---
 
-## Development
+## 云文档评论
+
+云文档评论按文档权限生效：能在支持的文档里评论并 @bot 的人均可触发回复，无需单独绑定工作目录或建立文档白名单。
+
+---
+
+## 开发
 
 ```bash
 pnpm install
@@ -316,9 +314,9 @@ pnpm build
 
 ---
 
-## Acknowledgements
+## 致谢
 
-This project is built on top of [zarazhangrui/feishu-claude-code-bridge](https://github.com/zarazhangrui/feishu-claude-code-bridge) under the MIT license. Thank you zarazhangrui for creating such a solid foundation for bridging Feishu with local AI agents, and for welcoming community forks.
+本项目基于 [zarazhangrui/feishu-claude-code-bridge](https://github.com/zarazhangrui/feishu-claude-code-bridge) 开发，遵循 MIT 协议。感谢 zarazhangrui 构建了如此完善的飞书-Claude Code 桥接基础设施，并以开放的态度鼓励社区在此之上继续创作。
 
 ---
 
