@@ -160,59 +160,33 @@ Private by default — only the bot creator can use it. Manage access with:
 
 ---
 
-## Quick deployment (server)
+## Quick deployment
 
-### Prerequisites
+**Recommended: let Claude Code install it for you.**
 
-- Node.js >= 20.12.0
-- Claude Code installed and logged in: `claude` — see https://docs.anthropic.com/en/docs/claude-code/quickstart
-- A Feishu / Lark PersonalAgent app (the first-run wizard can create one)
+Open Claude Code on your server and send it this prompt:
 
-### Install
+```
+Help me install and configure lark-team-agent (a Feishu × Claude Code team bot).
+Project: https://github.com/Fengzhaopeng/lark-team-agent
+Please follow the README to install, configure the Feishu app, and start the service.
+```
+
+Claude Code will read the README, run the install steps, and guide you through the Feishu app setup — no manual work needed.
+
+---
+
+### Manual install (fallback)
+
+Prerequisites: Node.js >= 20.12.0, Claude Code installed and logged in.
 
 ```bash
 git clone https://github.com/Fengzhaopeng/lark-team-agent.git
 cd lark-team-agent
-pnpm install
-pnpm build
+npm install --ignore-scripts
+npm run build
 npm install -g .
-```
-
-### First run
-
-```bash
 lark-team-agent run
-```
-
-### Enable multi-user mode
-
-Edit `~/.lark-channel/config.json` and add to the active profile:
-
-```json
-{
-  "multiUser": {
-    "enabled": true,
-    "workspaceRoot": "/workspace"
-  }
-}
-```
-
-Ensure the root directory exists and is writable by the bridge process:
-
-```bash
-mkdir -p /workspace
-```
-
-Restart the bridge. The next user to DM the bot will be automatically onboarded.
-
-### Custom onboarding content
-
-Place an `onboarding.md` file in the bridge config directory. Supported placeholders:
-
-```
-{name}        User's Feishu display name
-{workspace}   Absolute path to the user's workspace
-{pinyinDir}   Workspace directory name (pinyin of the user's name)
 ```
 
 ---

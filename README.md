@@ -158,59 +158,33 @@
 
 ---
 
-## 快速部署（服务器端）
+## 快速部署
 
-### 前置条件
+**推荐方式：让 Claude Code 帮你安装。**
 
-- Node.js >= 20.12.0
-- Claude Code 已安装并登录：`claude`，详见 https://docs.anthropic.com/en/docs/claude-code/quickstart
-- 一个飞书 PersonalAgent 应用（首次启动向导可帮助创建）
+在你的服务器上打开 Claude Code，把下面这段话直接发给它：
 
-### 安装
+```
+帮我安装并配置 lark-team-agent（飞书 × Claude Code 团队 bot）。
+项目地址：https://github.com/Fengzhaopeng/lark-team-agent
+请按照 README 完成安装、配置飞书应用、启动服务，遇到问题主动解决。
+```
+
+Claude Code 会读取 README、执行安装步骤、引导你完成飞书应用配置，全程无需手动操作。
+
+---
+
+### 手动安装（备选）
+
+前置条件：Node.js >= 20.12.0，Claude Code 已安装并登录。
 
 ```bash
 git clone https://github.com/Fengzhaopeng/lark-team-agent.git
 cd lark-team-agent
-pnpm install
-pnpm build
+npm install --ignore-scripts
+npm run build
 npm install -g .
-```
-
-### 首次启动
-
-```bash
 lark-team-agent run
-```
-
-### 启用多用户模式
-
-编辑 `~/.lark-channel/config.json`，在对应 profile 中添加：
-
-```json
-{
-  "multiUser": {
-    "enabled": true,
-    "workspaceRoot": "/workspace"
-  }
-}
-```
-
-确保 `workspaceRoot` 目录已存在且 bridge 进程有写权限：
-
-```bash
-mkdir -p /workspace
-```
-
-重启 bridge 后，新用户首次私聊即自动完成工作空间初始化。
-
-### 自定义引导内容
-
-在 bridge 配置目录下创建 `onboarding.md`，支持以下占位符：
-
-```
-{name}        用户飞书姓名
-{workspace}   用户工作空间绝对路径
-{pinyinDir}   工作空间目录名（拼音）
 ```
 
 ---
