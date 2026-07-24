@@ -19,7 +19,10 @@ export function isQuotaError(line: string): boolean {
     /token quota is not enough/i.test(line) ||
     /quota.*not enough/i.test(line) ||
     /Failed to authenticate.*403/i.test(line) ||
-    /API Error.*403/i.test(line)
+    /API Error.*403/i.test(line) ||
+    // modelproxy.unipus.cn returns 401 "Invalid token" for monthly quota exhaustion
+    /Invalid token/i.test(line) ||
+    /API Error.*401/i.test(line)
   );
 }
 
