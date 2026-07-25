@@ -1,7 +1,7 @@
 # ============================================================
 # Stage 1: 构建阶段 —— 在 Node 环境下编译 lark-team-agent
 # ============================================================
-FROM node:20-slim AS lark-builder
+FROM node:24-slim AS lark-builder
 
 
 RUN apt-get update && apt-get install -y git \
@@ -15,9 +15,9 @@ RUN git clone https://github.com/Fengzhaopeng/lark-team-agent.git . \
     && npm pack
 
 # ============================================================
-# Stage 2: 运行阶段 —— node:20-slim + uv
+# Stage 2: 运行阶段 —— node:24-slim + uv
 # ============================================================
-FROM node:20-slim
+FROM node:24-slim
 # 安装运行时依赖：curl 用于安装 uv，tini 用于进程管理
 RUN apt-get update \
     && apt-get install -y \
