@@ -18,3 +18,4 @@ coverage/
 scripts/
 tests-smoke/
 .github/
+*.mirror

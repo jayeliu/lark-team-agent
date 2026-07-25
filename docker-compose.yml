@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  lark-agent:
+    build:
+      # Dockerfile 放在当前目录，文件名 Dockerfile
+      context: .
+      dockerfile: ./Dockerfile
+    image: lark-team-agent:latest
+    container_name: lark-team-agent
+    restart: always
+    # 环境变量从 .env 文件加载
+    env_file:
+      - .env
+    volumes:
+      # 持久化应用目录，保留claude配置与缓存
+      - ./agent-data:/app/.lark-channel-workspaces
+      - ./claude.json:/app/.claude.json
+      - ./claude:/app/.claude
+    # 如需对外端口根据业务自行开放（飞书机器人一般主动出网，无需暴露端口）
+    # ports:
+    #   - "3000:3000"
+    # 资源限制按需调整
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    # 日志滚动防止磁盘占满
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    # 网络使用默认bridge，如需接入外部网络自行修改
+    networks:
+      - agent-net
+
+networks:
+  agent-net:
+    driver: bridge
