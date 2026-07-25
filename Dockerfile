@@ -8,8 +8,7 @@ RUN apt-get update && apt-get install -y git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-COPY . /build
-RUN git clone https://github.com/Fengzhaopeng/lark-team-agent.git . \
+RUN git clone https://github.com/jayeliu/lark-team-agent.git . \
     && npm install --ignore-scripts \
     && npm run build \
     && npm pack
